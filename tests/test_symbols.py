@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from scipr.symbols import descriptor_for, parse_symbol, symbol_string
+from scipr.symbols import descriptor_for, method_descriptor, parse_symbol, symbol_string
 
 
 def test_symbol_string_shape() -> None:
@@ -93,3 +93,35 @@ def test_method_and_class_descriptor_helpers() -> None:
     assert method_descriptor("show", ["Foo"]) == "show(Foo)."
     assert method_descriptor("m", ("A", "B")) == "m(A,B)."
     assert class_descriptor("Foo") == "Foo#"
+
+
+def test_symbol_string_manager_keyword() -> None:
+    assert (
+        symbol_string("p", "1", "f().", manager="bioconductor") == "scip-r bioconductor p 1 f()."
+    )
+    assert symbol_string("p", ".", "f().", manager=".") == "scip-r . p . f()."
+
+
+def test_parse_member_descriptors() -> None:
+    m = parse_symbol("scip-r cran pkg 1.0 Counter#add().")
+    assert (m.owner, m.name, m.qualified_name) == ("Counter", "add", "Counter#add")
+    assert m.is_member and m.is_function and not m.is_method and not m.is_class
+    f = parse_symbol("scip-r cran pkg 1.0 Counter#n.")
+    assert (f.owner, f.name, f.is_function, f.is_member) == ("Counter", "n", False, True)
+    assert parse_symbol("scip-r cran pkg 1.0 Foo#").owner is None
+
+
+def test_method_descriptor_drops_trailing_any() -> None:
+    from scipr.symbols import member_descriptor, normalize_signature
+
+    assert method_descriptor("merge", ["A", "ANY"]) == "merge(A)."
+    assert method_descriptor("merge", ["ANY", "B"]) == "merge(ANY,B)."
+    assert method_descriptor("show", ["ANY"]) == "show(ANY)."
+    assert normalize_signature(["A", "ANY", "ANY"]) == ("A",)
+    assert member_descriptor("C", "m", is_function=True) == "C#m()."
+    assert member_descriptor("C", "f", is_function=False) == "C#f."
+
+
+def test_unknown_manager_is_external_marker() -> None:
+    p = parse_symbol("scip-r . stats . sd().")
+    assert p.manager == "." and p.is_external

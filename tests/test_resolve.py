@@ -74,7 +74,8 @@ def test_resolver_script_is_bundled() -> None:
 
 def test_guessed_names(fresh_index: scip.Index) -> None:
     names = guessed_names(fresh_index)
-    assert "mean" in names and "sd" in names and "setMethod" in names
+    assert "mean" in names and "print" in names  # print: S3 generic, package guessed
+    assert "sd" not in names and "setMethod" not in names  # importFrom-resolved statically
     assert "quantile" not in names  # explicit stats::quantile is not a guess
     assert names == sorted(names)
 
@@ -92,17 +93,18 @@ def test_find_rscript_not_on_path(monkeypatch) -> None:
 
 def test_merge_rewrites_guessed_references(fresh_index: scip.Index, resolution: dict) -> None:
     stats = merge_resolution(fresh_index, resolution)
-    assert stats.guessed_before == 14
-    assert stats.resolved == 14 and stats.still_guessed == 0 and stats.resolved_to_self == 0
+    assert stats.guessed_before == 10
+    assert stats.resolved == 10 and stats.still_guessed == 0 and stats.resolved_to_self == 0
     occ = symbols_at(fresh_index, "R/stats_helpers.R")
-    assert occ["scip-r cran base 4.6.0 mean()."] == [[2, 8, 12]]
-    assert occ["scip-r cran stats 4.6.0 sd()."] == [[3, 7, 9]]  # was guessed base, is an import
-    assert occ["scip-r cran stats 4.6.0 quantile()."] == [[9, 15, 23]]  # version filled
-    assert stats.versions_filled == 1
+    assert occ["scip-r r base 4.6.0 mean()."] == [[2, 8, 12]]
+    assert occ["scip-r r stats 4.6.0 sd()."] == [[3, 7, 9]]  # importFrom: version+manager filled
+    assert occ["scip-r r stats 4.6.0 quantile()."] == [[9, 15, 23]]
+    assert stats.versions_filled == 6  # sd, quantile, setClass, setGeneric, setMethod, R6Class
+    assert stats.managers_filled == 16
     occ = symbols_at(fresh_index, "R/classes.R")
-    assert occ["scip-r cran methods 4.6.0 setMethod()."] == [[5, 0, 9]]
+    assert occ["scip-r r methods 4.6.0 setMethod()."] == [[5, 0, 9]]
     assert occ["scip-r cran R6 2.6.1 R6Class()."] == [[14, 11, 18]]
-    assert not any("base . " in sym for sym in occ)
+    assert not any(" . " in sym for sym in occ)
 
 
 def test_merge_rebuilds_external_symbols(fresh_index: scip.Index, resolution: dict) -> None:
@@ -110,24 +112,26 @@ def test_merge_rebuilds_external_symbols(fresh_index: scip.Index, resolution: di
     ext = {s.symbol: s for s in fresh_index.external_symbols}
     assert list(ext) == sorted(ext)
     assert not any(GUESSED_NOTE in s.documentation[0] for s in ext.values())
-    assert ext["scip-r cran stats 4.6.0 sd()."].documentation == [
-        f"stats::sd  {RESOLVED_NOTE.format(via='imports')}"
+    assert ext["scip-r r base 4.6.0 mean()."].documentation == [
+        f"base::mean  {RESOLVED_NOTE.format(via='base')}"
     ]
-    assert ext["scip-r cran stats 4.6.0 quantile()."].documentation == [
+    assert ext["scip-r r stats 4.6.0 quantile()."].documentation == [
         "stats::quantile  (version from the installed package)"
     ]
-    # the S3 generic was added so the relationship target exists
-    assert ext["scip-r cran base 4.6.0 print()."].documentation == ["base::print"]
+    # the S3 generic (guessed statically) is now resolved like any other guess
+    assert ext["scip-r r base 4.6.0 print()."].documentation == [
+        f"base::print  {RESOLVED_NOTE.format(via='base')}"
+    ]
     assert not any(s.symbol.startswith("scip-r cran testpkg") for s in ext.values())
 
 
 def test_merge_adds_s3_relationship(fresh_index: scip.Index, resolution: dict) -> None:
     stats = merge_resolution(fresh_index, resolution)
-    assert stats.s3_relationships == 1
+    assert stats.s3_relationships == 0  # the static NAMESPACE link was rewritten, not added
     doc = fresh_index.documents[0]
     m = next(s for s in doc.symbols if s.symbol.endswith("print.zresult()."))
     assert [(r.symbol, r.is_implementation) for r in m.relationships] == [
-        ("scip-r cran base 4.6.0 print().", True)
+        ("scip-r r base 4.6.0 print().", True)
     ]
 
 
@@ -154,7 +158,9 @@ def test_merge_stamps_run_id(fresh_index: scip.Index, resolution: dict) -> None:
     merge_resolution(fresh_index, resolution)
     assert resolve_run_id(fresh_index) == resolution["run_id"]
     args = list(fresh_index.metadata.tool_info.arguments)
-    assert "resolver=scip-r-resolve/0.1.0" in args and "r_version=4.6.0" in args
+    assert "resolver=scip-r-resolve/0.2.0" in args and "r_version=4.6.0" in args
+    assert "bioc_version=3.24" in args
+    assert "package=testpkg" in args  # static stamps survive
 
 
 def test_merge_leaves_unresolved_names_guessed(fresh_index: scip.Index, resolution: dict) -> None:
@@ -162,7 +168,7 @@ def test_merge_leaves_unresolved_names_guessed(fresh_index: scip.Index, resoluti
     stats = merge_resolution(fresh_index, resolution)
     assert stats.still_guessed == 1
     ext = {s.symbol: s for s in fresh_index.external_symbols}
-    assert ext["scip-r cran base . mean()."].documentation == [f"base::mean  {GUESSED_NOTE}"]
+    assert ext["scip-r . base . mean()."].documentation == [f"base::mean  {GUESSED_NOTE}"]
 
 
 def test_merge_resolution_to_self_package(fresh_index: scip.Index, resolution: dict) -> None:
@@ -253,12 +259,14 @@ def test_cli_resolve_with_canned_resolution(
         ],
     )
     assert result.exit_code == 0, result.output
-    assert "14 of 14 guessed references resolved" in result.output
+    assert "10 of 10 guessed references resolved" in result.output
     idx = load_index(out)
     assert resolve_run_id(idx) == resolution["run_id"]
     meta = json.loads((tmp_path / "nested" / "r.scip.meta.json").read_text())
     assert meta["run_id"] == resolution["run_id"]
     assert meta["index"]["path"] == "r.scip"
+    assert meta["source"]["package"] == "testpkg" and meta["source"]["manager"] == "cran"
+    assert "resolve_run_id" not in meta["source"]
     import hashlib
 
     assert meta["index"]["sha256"] == hashlib.sha256(out.read_bytes()).hexdigest()
@@ -283,16 +291,91 @@ def test_real_resolver_end_to_end(testpkg_dir: Path, tmp_path: Path) -> None:
     idx = build_index(testpkg_dir)
     result = resolve_index(idx, testpkg_dir)
     assert result.stats.still_guessed == 0
-    assert result.stats.resolved == result.stats.guessed_before == 14
-    assert result.stats.s3_relationships == 1
-    assert result.resolution["package"] == {
-        "name": "testpkg",
-        "version": "0.1.0",
-        "path": str(testpkg_dir.resolve()),
-    }
+    assert result.stats.resolved == result.stats.guessed_before == 10
+    assert result.stats.s3_relationships == 0  # rewritten static link
+    pkg = result.resolution["package"]
+    assert (pkg["name"], pkg["version"], pkg["manager"], pkg["load_mode"]) == (
+        "testpkg",
+        "0.1.0",
+        "cran",
+        "load_all",
+    )
+    assert pkg["path"] == str(testpkg_dir.resolve())
     env = result.resolution["environment"]
     assert env["r_version"].count(".") == 2 and "stats" in env["packages"]
     assert len(result.resolution["run_id"]) == 32
     occ = symbols_at(idx, "R/stats_helpers.R")
     sd = next(s for s in occ if s.endswith(" sd()."))
-    assert sd.startswith("scip-r cran stats ") and " . " not in sd
+    assert sd.startswith("scip-r r stats ") and " . " not in sd
+
+
+# --- review-gap features ------------------------------------------------------------
+
+
+def test_run_resolver_requires_exactly_one_source() -> None:
+    from scipr.resolve import run_resolver
+
+    with pytest.raises(ValueError, match="exactly one"):
+        run_resolver()
+    with pytest.raises(ValueError, match="exactly one"):
+        run_resolver("x", installed="y")
+
+
+def test_class_hierarchy_relationships(fresh_index: scip.Index, resolution: dict) -> None:
+    for c in resolution["classes"]:
+        if c["name"] == "Interval":
+            c["contains"] = [
+                {"name": "numeric", "package": "methods", "version": "4.6.0", "manager": "r"},
+                {"name": "Counter", "package": "testpkg"},  # local class
+                {"name": "Ghost", "package": None},  # unknown: skipped
+            ]
+    stats = merge_resolution(fresh_index, resolution)
+    assert stats.class_relationships == 2
+    interval = next(
+        s for d in fresh_index.documents for s in d.symbols if s.symbol.endswith("Interval#")
+    )
+    assert sorted(r.symbol for r in interval.relationships) == [
+        "scip-r cran testpkg 0.1.0 Counter#",
+        "scip-r r methods 4.6.0 numeric#",
+    ]
+    ext = {s.symbol: s for s in fresh_index.external_symbols}
+    assert ext["scip-r r methods 4.6.0 numeric#"].kind == scip.SymbolInformation.Kind.Class
+
+
+def test_schema1_packages_still_accepted(fresh_index: scip.Index, resolution: dict) -> None:
+    resolution["environment"]["packages"] = {
+        k: v["version"] for k, v in resolution["environment"]["packages"].items()
+    }
+    stats = merge_resolution(fresh_index, resolution)
+    assert stats.resolved == 10
+    occ = symbols_at(fresh_index, "R/stats_helpers.R")
+    assert "scip-r . stats 4.6.0 quantile()." in occ
+
+
+def test_s4_signature_any_padding_matches(fresh_index: scip.Index, resolution: dict) -> None:
+    for m in resolution["methods"]:
+        if m["system"] == "S4":
+            m["signature"] = ["Interval", "ANY"]  # as R's method table would report
+    stats = merge_resolution(fresh_index, resolution)
+    assert stats.unmatched_methods == []
+
+
+def test_metadata_record_source_block(resolution: dict) -> None:
+    rec = metadata_record(
+        resolution,
+        MergeStats(),
+        source={"package": "p", "git_commit": "abc", "resolve_run_id": "old", "r_version": "x"},
+    )
+    assert rec["source"] == {"package": "p", "git_commit": "abc"}
+    assert rec["environment"]["bioc_version"] == "3.24"
+
+
+@pytest.mark.r
+@needs_r
+def test_real_resolver_installed_mode(tmp_path: Path) -> None:
+    from scipr.resolve import run_resolver
+
+    data = run_resolver(installed="jsonlite")
+    assert data["package"]["name"] == "jsonlite" and data["package"]["load_mode"] == "installed"
+    assert data["package"]["manager"] == "cran"
+    assert data["environment"]["packages"]["base"]["manager"] == "r"

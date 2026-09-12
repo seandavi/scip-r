@@ -20,15 +20,19 @@ def test_index_to_rows_shape(testpkg_index: scip.Index) -> None:
         "R/stats_helpers.R",
     ]
     assert rows["documents"][2] == {
+        "index_package": "testpkg",
+        "index_version": "0.1.0",
+        "index_manager": "cran",
+        "resolve_run_id": None,
         "relative_path": "R/stats_helpers.R",
         "language": "R",
         "n_symbols": 2,
         "n_occurrences": 32,
     }
-    assert len(rows["symbols"]) == 9
-    assert len(rows["occurrences"]) == 69
-    assert len(rows["external_symbols"]) == 15
-    assert len(rows["relationships"]) == 1  # width(Interval). implements width().
+    assert len(rows["symbols"]) == 11
+    assert len(rows["occurrences"]) == 73
+    assert len(rows["external_symbols"]) == 16
+    assert len(rows["relationships"]) == 2  # width(Interval). -> width(); print.zresult -> print
 
 
 def test_symbol_row_parsed_columns(testpkg_index: scip.Index) -> None:
@@ -40,16 +44,29 @@ def test_symbol_row_parsed_columns(testpkg_index: scip.Index) -> None:
     assert z["version"] == "0.1.0"
     assert z["is_function"] is True
     assert z["is_local"] is False
-    assert z["documentation"] == ["zscore <- function(x, na.rm = TRUE) {"]
+    assert z["documentation"] == ["zscore <- function(x, na.rm = TRUE) {", "@export"]
+    assert z["exported"] is True
     assert z["display_name"] is None
+    assert z["manager"] == "cran" and z["owner"] is None and z["is_member"] is False
+    p = next(r for r in rows["symbols"] if r["name"] == "print.zresult")
+    assert p["exported"] is False
+    add = next(r for r in rows["symbols"] if r["name"] == "add")
+    assert (add["owner"], add["is_member"], add["is_function"], add["kind"]) == (
+        "Counter",
+        True,
+        True,
+        "Method",
+    )
 
 
 def test_external_rows_flag_guesses(testpkg_index: scip.Index) -> None:
     rows = index_to_rows(testpkg_index)
     by_name = {(r["package"], r["name"]): r for r in rows["external_symbols"]}
     assert by_name[("base", "mean")]["guessed"] is True
-    assert by_name[("base", "sd")]["guessed"] is True  # NAMESPACE import, invisible statically
+    assert by_name[("stats", "sd")]["guessed"] is False  # importFrom(stats, sd)
     assert by_name[("stats", "quantile")]["guessed"] is False
+    assert by_name[("base", "print")]["guessed"] is True  # S3 generic, package guessed
+    assert by_name[("base", "mean")]["manager"] == "."
     assert all(r["relative_path"] is None for r in rows["external_symbols"])
 
 
@@ -87,6 +104,10 @@ def test_relationship_rows() -> None:
     rows = index_to_rows(idx)["relationships"]
     assert rows == [
         {
+            "index_package": None,
+            "index_version": None,
+            "index_manager": None,
+            "resolve_run_id": None,
             "relative_path": "R/a.R",
             "symbol": "scip-r cran pkg 1.0 f().",
             "related_symbol": "scip-r cran pkg 1.0 g().",
@@ -115,15 +136,17 @@ def test_index_to_arrow_schemas(testpkg_index: scip.Index) -> None:
 
     tables = index_to_arrow(testpkg_index)
     assert tuple(tables) == TABLES
-    assert tables["occurrences"].num_rows == 69
+    assert tables["occurrences"].num_rows == 73
     assert tables["occurrences"].schema.field("start_line").type == pa.int64()
+    assert tables["occurrences"].schema.field("caller").type == pa.string()
     assert tables["symbols"].schema.field("documentation").type == pa.list_(pa.string())
-    # empty tables still carry their schema
-    assert tables["relationships"].num_rows == 1
-    assert tables["relationships"].schema.names[:3] == [
+    assert tables["relationships"].num_rows == 2
+    assert tables["relationships"].schema.names[:5] == [
+        "index_package",
+        "index_version",
+        "index_manager",
+        "resolve_run_id",
         "relative_path",
-        "symbol",
-        "related_symbol",
     ]
 
 
@@ -145,12 +168,14 @@ def test_write_parquet_roundtrip(testpkg_index: scip.Index, tmp_path: Path) -> N
     written = write_parquet(testpkg_index, tmp_path / "nested" / "out")
     assert set(written) == set(TABLES)
     occ = pq.read_table(written["occurrences"]).to_pylist()
-    assert len(occ) == 69
+    assert len(occ) == 73
     defs = [o for o in occ if o["is_definition"] and not o["is_local"]]
     assert sorted(o["name"] for o in defs) == [
         "Counter",
         "Counter",
         "Interval",
+        "add",
+        "n",
         "print.zresult",
         "run_pipeline",
         "width",
@@ -158,10 +183,11 @@ def test_write_parquet_roundtrip(testpkg_index: scip.Index, tmp_path: Path) -> N
         "winsorize",
         "zscore",
     ]
+    assert all(o["index_package"] == "testpkg" for o in occ)
     ext = pq.read_table(written["external_symbols"]).to_pylist()
     rows = sorted((e["package"], e["name"], e["guessed"]) for e in ext)
-    assert ("base", "mean", True) in rows and ("base", "sd", True) in rows
-    assert [r for r in rows if not r[2]] == [("stats", "quantile", False)]
+    assert ("base", "mean", True) in rows and ("stats", "sd", False) in rows
+    assert ("stats", "quantile", False) in rows
 
 
 @pytest.mark.export
@@ -174,10 +200,10 @@ def test_write_duckdb_and_query(testpkg_index: scip.Index, tmp_path: Path) -> No
     assert counts == {
         "metadata": 1,
         "documents": 3,
-        "symbols": 9,
-        "external_symbols": 15,
-        "occurrences": 69,
-        "relationships": 1,
+        "symbols": 11,
+        "external_symbols": 16,
+        "occurrences": 73,
+        "relationships": 2,
     }
     con = duckdb.connect(str(db), read_only=True)
     try:
@@ -185,7 +211,8 @@ def test_write_duckdb_and_query(testpkg_index: scip.Index, tmp_path: Path) -> No
             """
             select o.relative_path, o.name
             from occurrences o
-            where not o.is_local and not o.is_definition and o.package = 'testpkg'
+            where not o.is_local and not o.is_definition and not o.is_member
+              and o.package = 'testpkg'
             order by 1, 2
             """
         ).fetchall()
@@ -214,3 +241,60 @@ def test_write_duckdb_overwrite_semantics(testpkg_index: scip.Index, tmp_path: P
         assert con.execute("select count(*) from documents").fetchone() == (3,)
     finally:
         con.close()
+
+
+# --- review-gap columns ------------------------------------------------------------
+
+
+def test_index_columns(testpkg_index: scip.Index) -> None:
+    from scipr.export import index_columns
+
+    assert index_columns(testpkg_index) == {
+        "index_package": "testpkg",
+        "index_version": "0.1.0",
+        "index_manager": "cran",
+        "resolve_run_id": None,
+    }
+    assert index_columns(scip.Index()) == dict.fromkeys(index_columns(testpkg_index))
+
+
+def test_caller_column(testpkg_index: scip.Index) -> None:
+    occ = index_to_rows(testpkg_index)["occurrences"]
+    by = {(r["relative_path"], r["start_line"], r["start_char"]): r for r in occ}
+    mean = by[("R/stats_helpers.R", 2, 8)]
+    assert mean["name"] == "mean" and mean["caller"] == "scip-r cran testpkg 0.1.0 zscore()."
+    zdef = by[("R/stats_helpers.R", 1, 0)]
+    assert zdef["is_definition"] and zdef["caller"] is None
+    local = by[("R/stats_helpers.R", 2, 2)]  # mu <-
+    assert local["is_local"] and local["caller"] == "scip-r cran testpkg 0.1.0 zscore()."
+    inv = next(r for r in occ if r["name"] == "invisible" and r["start_line"] == 19)
+    assert inv["caller"] == "scip-r cran testpkg 0.1.0 Counter#add()."
+    top = next(r for r in occ if r["name"] == "representation")
+    assert top["caller"] == "scip-r cran testpkg 0.1.0 Interval#"  # inside the setClass call
+    sd = next(r for r in occ if r["name"] == "sd")
+    assert sd["internal_access"] is False
+
+
+def test_internal_access_column(make_package) -> None:
+    from scipr import build_index
+
+    root = make_package({"R/a.R": "f <- function() { ext:::s(); ext::o() }\n"})
+    rows = index_to_rows(build_index(root))["occurrences"]
+    flags = {r["name"]: r["internal_access"] for r in rows if r["package"] == "ext"}
+    assert flags == {"s": True, "o": False}
+
+
+@pytest.mark.export
+def test_write_parquet_hive_layout(testpkg_index: scip.Index, tmp_path: Path) -> None:
+    pq = pytest.importorskip("pyarrow.parquet")
+    from scipr.export import write_parquet
+
+    written = write_parquet(testpkg_index, tmp_path / "hive", hive=True)
+    assert written["occurrences"] == tmp_path / "hive" / "occurrences"
+    files = list((tmp_path / "hive" / "occurrences").rglob("*.parquet"))
+    assert len(files) == 1
+    assert files[0].parent.name == "index_version=0.1.0"
+    assert files[0].parent.parent.name == "index_package=testpkg"
+    table = pq.read_table(str(tmp_path / "hive" / "occurrences"))
+    assert table.num_rows == 73
+    assert "index_package" in table.column_names  # restored from the path
