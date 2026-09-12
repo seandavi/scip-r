@@ -8,8 +8,11 @@ available. The writers need the optional ``export`` extra::
 Tables (all string columns unless noted):
 
 ``metadata``
-    one row: ``tool_name``, ``tool_version``, ``project_root``,
-    ``protocol_version``, ``text_document_encoding``
+    one row: ``tool_name``, ``tool_version``, ``tool_arguments``
+    (list<string>), ``project_root``, ``protocol_version``,
+    ``text_document_encoding``, ``resolve_run_id`` (null unless
+    ``scip-r resolve`` produced the index; joins to the sidecar metadata
+    record's ``run_id``)
 ``documents``
     ``relative_path``, ``language``, ``n_symbols`` (int), ``n_occurrences``
     (int)
@@ -29,7 +32,11 @@ Tables (all string columns unless noted):
     ``is_implementation``, ``is_type_definition``, ``is_definition``
 
 Parsed symbol columns: ``is_local`` (bool), ``scheme``, ``manager``,
-``package``, ``version``, ``descriptor``, ``name``, ``is_function`` (bool).
+``package``, ``version``, ``descriptor``, ``name``, ``disambiguator`` (S4
+method signature, else null), ``is_function`` (bool), ``is_method`` (bool),
+``is_class`` (bool).
+
+See ``docs/parquet-schema.md`` for the full column reference.
 """
 
 from __future__ import annotations
@@ -72,7 +79,10 @@ def _symbol_columns(symbol: str) -> Row:
         "version": p.version,
         "descriptor": p.descriptor,
         "name": p.name,
+        "disambiguator": p.disambiguator,
         "is_function": p.is_function,
+        "is_method": p.is_method,
+        "is_class": p.is_class,
     }
 
 
@@ -128,13 +138,19 @@ def index_to_rows(index: scip.Index) -> dict[str, list[Row]]:
     """Flatten an index into ``{table_name: [row, ...]}``. Pure Python."""
     md = index.metadata
     rows: dict[str, list[Row]] = {name: [] for name in TABLES}
+    run_id = next(
+        (a.split("=", 1)[1] for a in md.tool_info.arguments if a.startswith("resolve_run_id=")),
+        None,
+    )
     rows["metadata"].append(
         {
             "tool_name": md.tool_info.name,
             "tool_version": md.tool_info.version,
+            "tool_arguments": list(md.tool_info.arguments),
             "project_root": md.project_root,
             "protocol_version": scip.ProtocolVersion.Name(md.version),
             "text_document_encoding": scip.TextEncoding.Name(md.text_document_encoding),
+            "resolve_run_id": run_id,
         }
     )
     for doc in index.documents:
@@ -173,7 +189,10 @@ def _arrow_schemas() -> dict[str, Any]:
         ("version", pa.string()),
         ("descriptor", pa.string()),
         ("name", pa.string()),
+        ("disambiguator", pa.string()),
         ("is_function", pa.bool_()),
+        ("is_method", pa.bool_()),
+        ("is_class", pa.bool_()),
     ]
     info_cols = [
         ("relative_path", pa.string()),
@@ -189,9 +208,11 @@ def _arrow_schemas() -> dict[str, Any]:
             [
                 ("tool_name", pa.string()),
                 ("tool_version", pa.string()),
+                ("tool_arguments", pa.list_(pa.string())),
                 ("project_root", pa.string()),
                 ("protocol_version", pa.string()),
                 ("text_document_encoding", pa.string()),
+                ("resolve_run_id", pa.string()),
             ]
         ),
         "documents": pa.schema(
