@@ -175,7 +175,9 @@ def test_external_symbols_sorted_and_documented(testpkg_index: scip.Index) -> No
 
 def test_locals_parameters_and_body_assignments(testpkg_index: scip.Index) -> None:
     occ = occurrences(testpkg_index, "R/pipeline.R")
-    # run_pipeline <- function(x, clip = TRUE) { y <- zscore(x); if (clip) { y <- winsorize(y) }; y }
+    # run_pipeline <- function(x, clip = TRUE) {
+    #   y <- zscore(x); if (clip) { y <- winsorize(y) }; y
+    # }
     assert occ[1] == ([1, 25, 26], "local 0", DEF)  # x
     assert occ[2] == ([1, 28, 32], "local 1", DEF)  # clip
     assert occ[3] == ([2, 2, 3], "local 2", DEF)  # y <-
