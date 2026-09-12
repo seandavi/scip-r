@@ -32,6 +32,9 @@ Bioconductor:
   surface, track adoption of a new function across thousands of
   packages, or spot copy-pasted helpers. Export to Parquet and query with
   DuckDB, or drop the files on object storage and query from a browser.
+- **"Which version of `dplyr` was this built against?"** With R
+  available, `scip-r resolve` records the exact installed versions and
+  the R environment alongside the index.
 - **"What changed?"** Index two versions of a package and diff the
   symbol tables to see added, removed and renamed functions.
 
@@ -57,6 +60,7 @@ scip-r index path/to/pkg -o index.scip --stats   # parse R/ and write the index
 scip-r stats index.scip                          # what did we find?
 scip-r print index.scip --no-locals              # readable dump
 scip-r export index.scip --format duckdb         # then query it with SQL
+scip-r resolve index.scip --pkg path/to/pkg      # optional: ask a real R session
 ```
 
 ## What it extracts
@@ -94,9 +98,8 @@ of R's runtime name resolution, so it does not attempt:
   the version because source alone doesn't say which version of `pkg` is
   intended.
 
-If your use case needs true go-to-definition across dispatch, you need
-something that runs R; see [`actions/ls-resolve/`](actions/ls-resolve/)
-for an optional, R-based second pass. scip-r itself is the cheap,
+If you have R available, `scip-r resolve` (below) replaces the guesses
+with real namespace lookups. scip-r itself is the cheap,
 no-R-runtime alternative, good for ecosystem-wide static analytics (call
 graphs, deprecated-API usage, cross-package reference counts) where
 approximate resolution across thousands of packages beats perfect
@@ -135,7 +138,7 @@ scip-r index path/to/pkg -o index.scip --stats
 `path/to/pkg` should be a package root (has `DESCRIPTION` and an `R/`
 directory). Only files under `R/` are indexed; `tests/`, `vignettes/`
 and `src/` are out of scope. Add `--emit-positions positions.json` to
-also dump every guessed call site for the languageserver pass below.
+also dump every guessed call site (file, position, name, enclosing function).
 
 ### `scip-r stats` and `scip-r print`
 
@@ -176,8 +179,7 @@ select package, count(*) from external_symbols
 where not guessed group by 1;
 ```
 
-Column definitions are in the [`scipr.export`](src/scipr/export.py)
-module docstring.
+Every column is documented in [docs/parquet-schema.md](docs/parquet-schema.md).
 
 ### Python API
 
@@ -205,36 +207,29 @@ SCIP treats the symbol string as opaque and human-readable, so any
 consistent scheme is valid. `scipr.symbols.parse_symbol` turns one back
 into its parts.
 
-## Optional: resolving call sites via a real R session (CI)
+## Optional: `scip-r resolve` with a real R session
 
-The tree-sitter pass guesses that an unqualified call like `mean(x)`
-resolves to base/attached R. [`actions/ls-resolve/`](actions/ls-resolve/)
-holds a second, **untested** piece that closes the gap by asking a live R
-session:
+The static pass guesses that an unqualified call like `mean(x)` lands in
+base R. If R is installed (with `pkgload`, `codetools`, `jsonlite` and the
+package's dependencies), a second pass replaces those guesses with what
+R's namespace machinery actually says, fills in installed versions, links
+S3 and S4 methods to their generics, and records the R environment:
 
-- `scip-r index ... --emit-positions positions.json` writes out every
-  guessed call site (only the guessed ones, not every token) as
-  `{file, line, character}`.
-- `ls_index.R` spawns `Rscript -e 'languageserver::run()'`, speaks LSP
-  over its stdio, and asks `textDocument/definition` at each position.
-- `action.yml` is a composite GitHub Action that runs this as a CI step
-  (`r-lib/actions/setup-r` + `setup-r-dependencies`, then the script,
-  then `upload-artifact`), meant to sit alongside an r-universe
-  build/check workflow.
+```bash
+scip-r resolve index.scip --pkg path/to/pkg --stats
+# -> index.resolved.scip + index.resolved.scip.meta.json
+```
 
-Two things worth knowing before wiring this into CI:
+The metadata record (R version, platform, every loaded namespace and its
+version) shares a `run_id` with the index, so a fleet of runs can be
+joined to the tables they produced. It does not resolve *which* method a
+call dispatches to; that depends on runtime classes. Instead the index
+models dispatch the SCIP way: call sites point at the generic and each
+method carries an implementation relationship.
 
-1. **It resolves within-package calls reliably** (the full `R/` tree is on
-   disk). Cross-package resolution only works if that dependency was
-   installed **with source references kept**
-   (`options(keep.source.pkgs = TRUE)`), which most RSPM/binary-cached CI
-   installs skip.
-2. **It's not fast.** One blocking request per guessed position. A
-   mid-size Bioconductor package can have over a thousand of them.
-
-This half has not been run against a real R session. Treat the wire
-framing and request shapes as spec-correct, but test `ls_index.R`
-locally before trusting it in a pipeline.
+Details, requirements and the JSON contract: [docs/resolve.md](docs/resolve.md).
+Design rationale: [ADR 0001](docs/adr/0001-r-based-resolution.md).
+For CI, [`actions/resolve/`](actions/resolve/) runs both passes.
 
 ## Development
 

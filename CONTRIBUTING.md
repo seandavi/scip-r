@@ -29,6 +29,7 @@ Everyday commands:
 ```bash
 uv run pytest                          # full suite (~1 s)
 uv run pytest -m "not export"          # skip Parquet/DuckDB tests
+uv run pytest -m r                     # only the tests that need R (auto-skipped without it)
 uv run pytest --cov=scipr              # with coverage
 uv run ruff check . && uv run ruff format --check .
 uv run mypy
@@ -45,7 +46,9 @@ uv run scip-r index tests/fixtures/testpkg -o /tmp/index.scip --stats
 | `src/scipr/export.py` | flatten to rows; Parquet and DuckDB writers behind the `export` extra |
 | `src/scipr/cli.py` | typer app: `index`, `stats`, `print`, `export` |
 | `src/scipr/scip_pb2.py` | **generated** from `proto/scip.proto`; do not hand-edit |
-| `actions/ls-resolve/` | optional, R-based call-site resolver (composite GitHub Action) |
+| `src/scipr/resolve.py`, `src/scipr/r/resolve.R` | optional second pass with a real R session (`scip-r resolve`); see `docs/resolve.md` |
+| `actions/resolve/` | composite GitHub Action running both passes |
+| `docs/` | ADRs, Parquet schema, Python API, resolver guide |
 | `tests/fixtures/testpkg` | tiny R package used by most tests, plus its golden index |
 
 ## Adding a parser change

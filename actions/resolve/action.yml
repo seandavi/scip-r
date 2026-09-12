@@ -1,0 +1,66 @@
+name: 'scip-r index and resolve'
+description: >
+  Builds a SCIP index for an R package with scip-r (static, tree-sitter),
+  then runs `scip-r resolve` in a real R session to replace guessed call
+  targets with namespace-resolved ones and to record the R environment.
+  Uploads the resolved index and its metadata record as an artifact.
+inputs:
+  package-path:
+    description: 'Path to the package root (has DESCRIPTION and R/)'
+    required: false
+    default: '.'
+  r-version:
+    description: 'R version for r-lib/actions/setup-r'
+    required: false
+    default: 'release'
+  scip-r-ref:
+    description: 'Git ref of seandavi/scip-r to install'
+    required: false
+    default: 'main'
+  output-dir:
+    description: 'Directory for index.scip, index.resolved.scip and the metadata record'
+    required: false
+    default: 'scip-out'
+  timeout-minutes:
+    description: 'Hard timeout for the R resolution pass'
+    required: false
+    default: '15'
+runs:
+  using: 'composite'
+  steps:
+    - uses: r-lib/actions/setup-r@v2
+      with:
+        r-version: ${{ inputs.r-version }}
+        use-public-rspm: true
+
+    - name: Install resolver prerequisites and the package's dependencies
+      uses: r-lib/actions/setup-r-dependencies@v2
+      with:
+        extra-packages: |
+          any::pkgload
+          any::codetools
+          any::jsonlite
+        working-directory: ${{ inputs.package-path }}
+
+    - uses: astral-sh/setup-uv@v6
+
+    - name: Install scip-r
+      shell: bash
+      run: |
+        uv tool install "scip-r[export] @ git+https://github.com/seandavi/scip-r@${{ inputs.scip-r-ref }}" \
+          --with "tree-sitter-r @ git+https://github.com/r-lib/tree-sitter-r@v1.3.0"
+
+    - name: Index and resolve
+      shell: bash
+      run: |
+        mkdir -p "${{ inputs.output-dir }}"
+        scip-r index "${{ inputs.package-path }}" -o "${{ inputs.output-dir }}/index.scip" --stats
+        timeout ${{ inputs.timeout-minutes }}m \
+          scip-r resolve "${{ inputs.output-dir }}/index.scip" --pkg "${{ inputs.package-path }}" \
+            -o "${{ inputs.output-dir }}/index.resolved.scip" --stats
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: scip-r-${{ github.job }}
+        path: ${{ inputs.output-dir }}
+        retention-days: 7

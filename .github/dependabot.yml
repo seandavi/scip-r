@@ -5,7 +5,7 @@ updates:
     schedule:
       interval: "monthly"
   - package-ecosystem: "github-actions"
-    directory: "/actions/ls-resolve"
+    directory: "/actions/resolve"
     schedule:
       interval: "monthly"
   - package-ecosystem: "uv"
