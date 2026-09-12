@@ -8,6 +8,34 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `scip-r index` accepts a source tarball (`.tar.gz`); the digest is
+  stamped as provenance. `--manager` overrides the manager inferred from
+  DESCRIPTION (`biocViews` gives `bioconductor`, `Priority: base` gives
+  `r`, default `cran`).
+- `scip-r batch`: index (and optionally resolve and export) many
+  packages with `--jobs`, per-package output directories, isolated
+  failures and a `summary.jsonl`.
+- `scip-r resolve --installed NAME` resolves against an installed
+  package via `loadNamespace()` instead of compiling a checkout.
+- `scip-r export --format parquet --hive` writes a hive-partitioned
+  dataset (`<table>/index_package=…/index_version=…/`).
+- NAMESPACE is parsed statically: exported symbols carry `@export` (and
+  an `exported` column), `importFrom` names resolve to their package
+  without R, `S3method` registrations link methods to generics.
+- R6 and reference-class members become `Class#name().` / `Class#name.`
+  symbols; `self$x` / `private$x` resolve inside their methods. S4
+  `contains` and R6 `inherit` become class-hierarchy relationships;
+  `setMethod` named arguments are parsed and signatures drop trailing
+  `ANY` so they match R's method tables.
+- Every definition occurrence carries `enclosing_range`; the export
+  derives a `caller` column from it. `pkg:::name` references are marked
+  (`internal_access`). Every exported row carries `index_package`,
+  `index_version`, `index_manager`, `resolve_run_id`.
+- Provenance stamps in `tool_info.arguments`: `package`, `version`,
+  `manager`, `git_commit`, `git_dirty`, `source_tarball`,
+  `source_sha256`, Bioconductor/CRAN build fields; the resolver adds
+  `bioc_version` and records package managers (resolution schema 2).
+  The sidecar record gains a `source` block.
 - `scip-r resolve`: an optional second pass that loads the package in a
   real R session (`pkgload`) and replaces guessed call targets with
   namespace-resolved packages and installed versions, links S3 and S4
@@ -53,6 +81,9 @@ uses [Semantic Versioning](https://semver.org/).
 - `metadata.tool_info.version` records the installed scip-r version
   instead of a hard-coded string.
 - Document `relative_path` always uses forward slashes.
+- External symbols seen only from source now use `.` for the manager
+  (`scip-r . stats . sd().`) instead of asserting `cran`; the resolver
+  fills in `cran`, `bioconductor` or `r`.
 - Minimum Python is 3.10; `protobuf` is pinned to `>=7.35.1,<8` to match
   the generated bindings.
 - The example package and its index live under `tests/fixtures/`. The
@@ -61,6 +92,13 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Documents now declare `UTF8CodeUnitOffsetFromLineStart`, matching the
+  byte columns tree-sitter reports (#11).
+- `x$field` / `x@slot` no longer emit a reference to a top-level symbol
+  that happens to share the field's name.
+- `Collate` order is honoured when deciding which duplicate definition
+  wins (#14). Dotfiles (including macOS `._*` files in tarballs) are
+  skipped, as R does.
 - Named-argument labels (`f(na.rm = na.rm)`) were indexed as variable
   reads of `na.rm`, producing a spurious reference occurrence at the label
   position whenever the label matched an in-scope name. Only the value is

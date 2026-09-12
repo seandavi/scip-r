@@ -25,6 +25,17 @@ inputs:
     description: 'Hard timeout for the R resolution pass'
     required: false
     default: '15'
+  installed:
+    description: >
+      Name of an already-installed package to resolve against (loadNamespace)
+      instead of loading the checkout with pkgload. Leave empty to use
+      package-path.
+    required: false
+    default: ''
+  export:
+    description: 'Also export the resolved index: parquet, duckdb, or empty for none'
+    required: false
+    default: 'parquet'
 runs:
   using: 'composite'
   steps:
@@ -55,9 +66,18 @@ runs:
       run: |
         mkdir -p "${{ inputs.output-dir }}"
         scip-r index "${{ inputs.package-path }}" -o "${{ inputs.output-dir }}/index.scip" --stats
+        if [ -n "${{ inputs.installed }}" ]; then
+          source_args=(--installed "${{ inputs.installed }}")
+        else
+          source_args=(--pkg "${{ inputs.package-path }}")
+        fi
         timeout ${{ inputs.timeout-minutes }}m \
-          scip-r resolve "${{ inputs.output-dir }}/index.scip" --pkg "${{ inputs.package-path }}" \
+          scip-r resolve "${{ inputs.output-dir }}/index.scip" "${source_args[@]}" \
             -o "${{ inputs.output-dir }}/index.resolved.scip" --stats
+        if [ -n "${{ inputs.export }}" ]; then
+          scip-r export "${{ inputs.output-dir }}/index.resolved.scip" --format "${{ inputs.export }}" \
+            -o "${{ inputs.output-dir }}/export"
+        fi
 
     - uses: actions/upload-artifact@v4
       with:

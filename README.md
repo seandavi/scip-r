@@ -57,10 +57,12 @@ approach that gives useful answers: a syntax-directed pass over
 
 ```bash
 scip-r index path/to/pkg -o index.scip --stats   # parse R/ and write the index
+scip-r index pkg_1.0.tar.gz -o index.scip        # a CRAN/Bioconductor tarball works too
 scip-r stats index.scip                          # what did we find?
 scip-r print index.scip --no-locals              # readable dump
 scip-r export index.scip --format duckdb         # then query it with SQL
 scip-r resolve index.scip --pkg path/to/pkg      # optional: ask a real R session
+scip-r batch pkgs/ -o out --jobs 8 --export parquet --hive   # many packages at once
 ```
 
 ## What it extracts
@@ -136,9 +138,25 @@ scip-r index path/to/pkg -o index.scip --stats
 ```
 
 `path/to/pkg` should be a package root (has `DESCRIPTION` and an `R/`
-directory). Only files under `R/` are indexed; `tests/`, `vignettes/`
-and `src/` are out of scope. Add `--emit-positions positions.json` to
-also dump every guessed call site (file, position, name, enclosing function).
+directory) or a source tarball. Only files under `R/` are indexed, in
+`Collate` order; `tests/`, `vignettes/` and `src/` are out of scope. The
+static pass also reads `NAMESPACE`: exported symbols are marked
+`@export`, `importFrom` names resolve to their package without R, and
+`S3method` registrations link methods to generics. `--manager` overrides
+the manager inferred from DESCRIPTION (`biocViews` means `bioconductor`).
+Add `--emit-positions positions.json` to also dump every guessed call
+site (file, position, name, enclosing function).
+
+### `scip-r batch`: many packages
+
+```bash
+scip-r batch pkgs/ tarballs/*.tar.gz --manifest more.txt -o out --jobs 8 \
+    --resolve --export parquet --hive
+```
+
+Each package lands in `out/<package>/`; failures are isolated and listed
+in `out/summary.jsonl`; with `--hive` all Parquet output forms one
+partitioned dataset under `out/parquet/`.
 
 ### `scip-r stats` and `scip-r print`
 
@@ -162,10 +180,12 @@ scip-r export index.scip --format duckdb  -o index.duckdb [--overwrite]
 ```
 
 Both produce the same six tables: `metadata`, `documents`, `symbols`,
-`external_symbols`, `occurrences`, `relationships`. Every symbol-bearing
+`external_symbols`, `occurrences`, `relationships`. Every row carries the
+indexed package, version, manager and resolve run id; every symbol-bearing
 row also carries the symbol string pre-parsed into `package`, `version`,
-`name`, `is_function`, `is_local` columns, so queries don't need to
-split strings:
+`name`, `is_function`, `is_local` columns; occurrences carry the
+`caller` (enclosing function) and whether the reference used `:::`.
+Queries don't need to split strings:
 
 ```sql
 -- who calls what, ignoring locals and definitions
@@ -177,6 +197,10 @@ group by all order by n desc;
 -- which external packages does this package lean on?
 select package, count(*) from external_symbols
 where not guessed group by 1;
+
+-- call graph
+select caller, name, count(*) from occurrences
+where caller is not null and not is_definition group by all;
 ```
 
 Every column is documented in [docs/parquet-schema.md](docs/parquet-schema.md).
@@ -196,11 +220,14 @@ write_parquet(index, "index-parquet/")  # needs scip-r[export]
 
 ## Symbol scheme
 
-Package-level: `scip-r cran <package> <version> <name>().` (functions) or
-`scip-r cran <package> <version> <name>.` (non-function top-level
-objects). External references use the same shape with the version
-replaced by `.` since it's unknown from source. Locals use SCIP's own
-`local N` convention, scoped per document.
+Package-level: `scip-r <manager> <package> <version> <descriptor>` where
+the manager is `cran`, `bioconductor` or `r` (ships with R), and the
+descriptor is `name().` for functions, `name(Sig).` for S4 methods,
+`Name#` for classes, `Class#name().` / `Class#name.` for R6 and
+reference-class members, and `name.` for other objects. External
+references seen only from source use `.` for both manager and version;
+`scip-r resolve` fills them in. Locals use SCIP's own `local N`
+convention, scoped per document.
 
 This is a project-specific convention, not part of the SCIP spec itself.
 SCIP treats the symbol string as opaque and human-readable, so any
