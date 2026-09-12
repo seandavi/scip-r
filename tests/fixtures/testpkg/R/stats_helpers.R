@@ -1,8 +1,8 @@
 #' Compute z-scores for a numeric vector
 zscore <- function(x, na.rm = TRUE) {
   mu <- mean(x, na.rm = na.rm)
-  s <- stats::sd(x, na.rm = na.rm)
-  (x - mu) / s
+  s <- sd(x, na.rm = na.rm)
+  structure((x - mu) / s, class = "zresult")
 }
 
 #' Winsorize a vector at given quantiles

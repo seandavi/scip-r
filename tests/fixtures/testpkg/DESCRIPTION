@@ -1,2 +1,5 @@
 Package: testpkg
 Version: 0.1.0
+Title: Fixture Package for scip-r Tests
+Description: A tiny package exercising cross-file calls, S3, S4 and R6.
+Imports: stats, methods, R6

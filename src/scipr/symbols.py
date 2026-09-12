@@ -5,14 +5,22 @@ package-level and external symbols::
 
     scip-r cran <package> <version> <descriptor>
 
-where ``<descriptor>`` is ``name().`` for functions and ``name.`` for other
-top-level objects, and ``<version>`` is ``.`` when unknown (external
-references resolved from source alone). Locals use SCIP's own
-``local N`` convention and are only meaningful within one document.
+where ``<descriptor>`` is one of
+
+- ``name().`` for functions,
+- ``name(Sig).`` for S4 methods, with the signature classes joined by ``,``
+  as the disambiguator (``width(Interval).``, ``show(A,B).``),
+- ``name#`` for classes (S4, reference and R6),
+- ``name.`` for other top-level objects,
+
+and ``<version>`` is ``.`` when unknown (external references resolved from
+source alone). Locals use SCIP's own ``local N`` convention and are only
+meaningful within one document.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 SCHEME = "scip-r"
@@ -32,26 +40,52 @@ class ParsedSymbol:
     version: str | None = None
     descriptor: str | None = None
 
-    @property
-    def name(self) -> str | None:
-        """Bare name with the descriptor suffix (``().`` or ``.``) stripped."""
+    def _split(self) -> tuple[str, str | None, str] | None:
+        """``(name, disambiguator, suffix)`` or None for locals/unknown."""
         if self.descriptor is None:
             return None
-        d = self.descriptor
-        if d.endswith("()."):
-            return d[:-3]
-        if d.endswith("."):
-            return d[:-1]
-        return d
+        m = _DESCRIPTOR_RE.match(self.descriptor)
+        if m is None:
+            return self.descriptor, None, ""
+        if m.group("suffix") is not None:  # name(...). form
+            return m.group("name"), m.group("disamb") or None, ")."
+        return m.group("name"), None, m.group("suffix2")
+
+    @property
+    def name(self) -> str | None:
+        """Bare name with the descriptor suffix and disambiguator stripped."""
+        parts = self._split()
+        return None if parts is None else parts[0]
+
+    @property
+    def disambiguator(self) -> str | None:
+        """S4 method signature (``Interval`` in ``width(Interval).``), else None."""
+        parts = self._split()
+        return None if parts is None else parts[1]
 
     @property
     def is_function(self) -> bool:
-        return self.descriptor is not None and self.descriptor.endswith("().")
+        parts = self._split()
+        return parts is not None and parts[2] == ")."
+
+    @property
+    def is_method(self) -> bool:
+        return self.is_function and self.disambiguator is not None
+
+    @property
+    def is_class(self) -> bool:
+        parts = self._split()
+        return parts is not None and parts[2] == "#"
 
     @property
     def is_external(self) -> bool:
         """True for references whose defining package was not indexed."""
         return not self.is_local and self.version == UNKNOWN_VERSION
+
+
+_DESCRIPTOR_RE = re.compile(
+    r"^(?P<name>.*?)(?:\((?P<disamb>[^()]*)\)(?P<suffix>\.)|(?P<suffix2>[.#]))$"
+)
 
 
 def symbol_string(package: str, version: str, descriptor: str, *, scheme: str = SCHEME) -> str:
@@ -61,6 +95,15 @@ def symbol_string(package: str, version: str, descriptor: str, *, scheme: str = 
 
 def descriptor_for(name: str, *, is_function: bool) -> str:
     return f"{name}()." if is_function else f"{name}."
+
+
+def method_descriptor(generic: str, signature: list[str] | tuple[str, ...]) -> str:
+    """Descriptor for an S4 method: ``generic(Class1,Class2).``"""
+    return f"{generic}({','.join(signature)})."
+
+
+def class_descriptor(name: str) -> str:
+    return f"{name}#"
 
 
 def parse_symbol(symbol: str) -> ParsedSymbol:
