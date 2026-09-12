@@ -8,6 +8,25 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `scip-r resolve`: an optional second pass that loads the package in a
+  real R session (`pkgload`) and replaces guessed call targets with
+  namespace-resolved packages and installed versions, links S3 and S4
+  methods to their generics with `is_implementation` relationships, and
+  writes a sidecar metadata record (R version, platform, loaded
+  namespaces) keyed by a `run_id` that is also stamped into the index and
+  exposed as `metadata.resolve_run_id` on export. See `docs/resolve.md`
+  and ADR 0001.
+- The static pass emits class, generic and S4 method symbols for
+  `setClass`, `setRefClass`, `R6Class`, `setGeneric` and `setMethod`
+  calls (`Name#`, `generic().`, `generic(Sig).`), and links a method to a
+  generic defined in the same package.
+- Guessed positions (`--emit-positions`) carry `name` and `enclosing`.
+- Export tables gain `tool_arguments`, `resolve_run_id` (metadata) and
+  `disambiguator`, `is_method`, `is_class` (parsed symbol columns).
+- Docs: `docs/parquet-schema.md`, `docs/python-api.md`, `docs/resolve.md`,
+  `docs/adr/0001-r-based-resolution.md`.
+- `actions/resolve/` composite action (index + resolve with R in CI); an
+  R job in CI runs the resolver end to end on the fixture package.
 - `scip-r` is now a typer application with subcommands: `index`, `stats`,
   `print`, and `export`; `--version`/`-V`.
 - `scip-r export --format parquet|duckdb` converts an index into flat
@@ -36,9 +55,9 @@ uses [Semantic Versioning](https://semver.org/).
 - Document `relative_path` always uses forward slashes.
 - Minimum Python is 3.10; `protobuf` is pinned to `>=7.35.1,<8` to match
   the generated bindings.
-- The example package and its index live under `tests/fixtures/`; the
-  languageserver composite action moved from `.github-action/` to
-  `actions/ls-resolve/`.
+- The example package and its index live under `tests/fixtures/`. The
+  fixture now has a NAMESPACE, an S3 method, an S4 class/generic/method
+  and an R6 class.
 
 ### Fixed
 
@@ -60,6 +79,9 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Removed
 
+- The untested languageserver-based resolver (`ls_index.R` and the
+  `.github-action/` composite action). `scip-r resolve` replaces it; see
+  ADR 0001 for why LSP was the wrong mechanism.
 - The prebuilt Linux `tree-sitter-r` wheel is no longer tracked in the
   repository; install `tree-sitter-r` from its git tag instead (see README).
 

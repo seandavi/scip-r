@@ -30,7 +30,7 @@ def test_index_writes_file(testpkg_dir: Path, tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert result.output == ""
     idx = load_index(out)
-    assert len(idx.documents) == 2
+    assert len(idx.documents) == 3
 
 
 def test_index_default_output_name(testpkg_dir: Path, tmp_path: Path, monkeypatch) -> None:
@@ -48,12 +48,16 @@ def test_index_stats_and_positions(testpkg_dir: Path, tmp_path: Path) -> None:
         ["index", str(testpkg_dir), "-o", str(out), "--stats", "--emit-positions", str(pos)],
     )
     assert result.exit_code == 0, result.output
-    assert f"{pos}: 2 guessed positions" in result.output
-    assert f"{out}: 2 documents, 3 defined symbols, 42 occurrences" in result.output
-    assert json.loads(pos.read_text()) == [
-        {"file": "R/stats_helpers.R", "line": 2, "character": 8},
-        {"file": "R/stats_helpers.R", "line": 8, "character": 33},
-    ]
+    assert f"{out}: 3 documents, 9 defined symbols, 69 occurrences" in result.output
+    positions = json.loads(pos.read_text())
+    assert {
+        "file": "R/stats_helpers.R",
+        "line": 2,
+        "character": 8,
+        "name": "mean",
+        "enclosing": "zscore",
+    } in positions
+    assert f"{pos}: {len(positions)} guessed positions" in result.output
 
 
 def test_index_missing_dir_fails(tmp_path: Path) -> None:
@@ -71,8 +75,8 @@ def test_index_file_instead_of_dir_fails(testpkg_dir: Path) -> None:
 def test_stats_text(testpkg_index_file: Path) -> None:
     result = runner.invoke(app, ["stats", str(testpkg_index_file)])
     assert result.exit_code == 0, result.output
-    assert "2 documents, 3 defined symbols, 42 occurrences" in result.output
-    assert "external packages: base (2), stats (2)" in result.output
+    assert "3 documents, 9 defined symbols, 69 occurrences" in result.output
+    assert "external packages: base (14), stats (1)" in result.output
     assert "R/pipeline.R: 1 symbols, 11 occurrences (4 definitions)" in result.output
 
 
@@ -80,8 +84,8 @@ def test_stats_json(testpkg_index_file: Path) -> None:
     result = runner.invoke(app, ["stats", str(testpkg_index_file), "--json"])
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
-    assert data["documents"] == 2
-    assert data["external_packages"] == {"base": 2, "stats": 2}
+    assert data["documents"] == 3
+    assert data["external_packages"] == {"base": 14, "stats": 1}
 
 
 def test_stats_missing_file(tmp_path: Path) -> None:
@@ -109,6 +113,7 @@ def test_print_json(testpkg_index_file: Path) -> None:
     data = json.loads(result.output)
     assert data["metadata"]["tool_info"]["name"] == "scip-r"
     assert [d["relative_path"] for d in data["documents"]] == [
+        "R/classes.R",
         "R/pipeline.R",
         "R/stats_helpers.R",
     ]
@@ -138,10 +143,10 @@ def test_export_duckdb_explicit_output(testpkg_index_file: Path, tmp_path: Path)
     db = tmp_path / "idx.duckdb"
     result = runner.invoke(app, ["export", str(testpkg_index_file), "-f", "duckdb", "-o", str(db)])
     assert result.exit_code == 0, result.output
-    assert "occurrences: 42 rows" in result.output
+    assert "occurrences: 69 rows" in result.output
     con = duckdb.connect(str(db), read_only=True)
     try:
-        assert con.execute("select count(*) from occurrences").fetchone() == (42,)
+        assert con.execute("select count(*) from occurrences").fetchone() == (69,)
     finally:
         con.close()
     # second run without --overwrite fails; with it succeeds

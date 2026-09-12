@@ -63,6 +63,40 @@ jobs:
           name: coverage-xml
           path: coverage.xml
 
+  resolve:
+    name: R resolver (end to end)
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: release
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: |
+            any::pkgload
+            any::codetools
+            any::jsonlite
+            any::R6
+          working-directory: tests/fixtures/testpkg
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --all-extras
+      - run: uv run --no-sync pytest -q -m r
+      - name: Resolve the fixture package end to end
+        run: |
+          uv run --no-sync scip-r index tests/fixtures/testpkg -o index.scip --stats
+          uv run --no-sync scip-r resolve index.scip --pkg tests/fixtures/testpkg --stats
+          uv run --no-sync scip-r print index.resolved.scip --no-locals
+          test "$(uv run --no-sync scip-r stats index.resolved.scip --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["guessed_external_symbols"])')" = "0"
+          uv run --no-sync scip-r export index.resolved.scip --format duckdb -o index.duckdb
+          python3 -c "import json; r = json.load(open('index.resolved.scip.meta.json')); print(r['run_id'], r['environment']['r_version'])"
+
   build:
     name: Build sdist and wheel
     runs-on: ubuntu-latest

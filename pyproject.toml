@@ -81,6 +81,7 @@ packages = ["src/scipr"]
 include = [
     "src/scipr",
     "proto",
+    "docs",
     "tests",
     "README.md",
     "LICENSE",
@@ -93,6 +94,7 @@ testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 markers = [
     "export: tests that need the optional [export] extra (pyarrow, duckdb)",
+    "r: tests that need Rscript with pkgload, codetools and jsonlite",
 ]
 
 [tool.coverage.run]

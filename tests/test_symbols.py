@@ -61,3 +61,35 @@ def test_parse_descriptor_with_spaces_keeps_tail() -> None:
     p = parse_symbol("scip-r cran pkg 1.0 weird name().")
     assert p.descriptor == "weird name()."
     assert p.name == "weird name"
+
+
+def test_parse_s4_method_descriptor() -> None:
+    p = parse_symbol("scip-r cran pkg 1.0 width(Interval).")
+    assert p.name == "width"
+    assert p.disambiguator == "Interval"
+    assert p.is_function and p.is_method and not p.is_class
+
+
+def test_parse_multi_signature_method() -> None:
+    p = parse_symbol("scip-r cran pkg 1.0 combine(A,B).")
+    assert (p.name, p.disambiguator) == ("combine", "A,B")
+
+
+def test_parse_class_descriptor() -> None:
+    p = parse_symbol("scip-r cran pkg 1.0 Interval#")
+    assert p.name == "Interval"
+    assert p.is_class and not p.is_function and not p.is_method
+    assert p.disambiguator is None
+
+
+def test_plain_function_has_no_disambiguator() -> None:
+    p = parse_symbol("scip-r cran pkg 1.0 f().")
+    assert p.disambiguator is None and not p.is_method and not p.is_class
+
+
+def test_method_and_class_descriptor_helpers() -> None:
+    from scipr.symbols import class_descriptor, method_descriptor
+
+    assert method_descriptor("show", ["Foo"]) == "show(Foo)."
+    assert method_descriptor("m", ("A", "B")) == "m(A,B)."
+    assert class_descriptor("Foo") == "Foo#"

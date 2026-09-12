@@ -23,5 +23,5 @@ body:
         - Parser / symbol resolution
         - CLI
         - Parquet / DuckDB export
-        - languageserver resolver (actions/ls-resolve)
+        - R resolver (scip-r resolve / actions/resolve)
         - Docs / packaging

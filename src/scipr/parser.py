@@ -30,13 +30,19 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import tree_sitter_r as tsr
 from tree_sitter import Language, Node, Parser
 
 from . import scip_pb2 as scip
-from .symbols import UNKNOWN_VERSION, descriptor_for, symbol_string
+from .symbols import (
+    UNKNOWN_VERSION,
+    class_descriptor,
+    descriptor_for,
+    method_descriptor,
+    symbol_string,
+)
 
 R_LANGUAGE = Language(tsr.language())
 
@@ -51,18 +57,31 @@ RIGHT_ASSIGN_OPS = frozenset({"->", "->>"})
 R_SOURCE_SUFFIXES = frozenset({".R", ".r"})
 
 GUESSED_PACKAGE = "base"
+
+# Calls that define S4 / reference / R6 classes, generics and methods. They
+# are recognised by name only (``methods::setClass`` works too); a package
+# that shadows these names will get odd results, which is acceptable.
+CLASS_DEFINERS = frozenset({"setClass", "setRefClass", "R6Class"})
+GENERIC_DEFINERS = frozenset({"setGeneric"})
+METHOD_DEFINERS = frozenset({"setMethod"})
 GUESSED_NOTE = "(unresolved call target; guessed to be base/attached R, not confirmed)"
 
 Range = tuple[int, ...]
 
 
 class GuessedPosition(TypedDict):
-    """A call site whose target scip-r could only guess. Shape matches what
-    ``actions/ls-resolve/ls_index.R`` consumes."""
+    """A call site whose target scip-r could only guess.
+
+    ``enclosing`` is the name of the top-level function the call sits in,
+    or ``None`` for top-level code; ``scip-r resolve`` uses ``name`` and
+    ``enclosing`` to join R-side namespace lookups back onto occurrences.
+    """
 
     file: str
     line: int
     character: int
+    name: str
+    enclosing: str | None
 
 
 @dataclass(frozen=True)
@@ -117,14 +136,32 @@ def _node_range(node: Node) -> Range:
 @dataclass
 class TopLevelSymbol:
     name: str
-    kind: str  # "function" or "value"
+    kind: str  # "function", "value", "class" or "method"
     signature: str
     file: Path
     range: Range
+    disambiguator: str | None = None  # S4 method signature classes, joined by ","
 
     @property
     def is_function(self) -> bool:
-        return self.kind == "function"
+        return self.kind in ("function", "method")
+
+    @property
+    def descriptor(self) -> str:
+        if self.kind == "class":
+            return class_descriptor(self.name)
+        if self.kind == "method":
+            return method_descriptor(self.name, (self.disambiguator or "").split(","))
+        return descriptor_for(self.name, is_function=self.is_function)
+
+    @property
+    def scip_kind(self) -> Any:
+        k = scip.SymbolInformation.Kind
+        return {
+            "function": k.Function,
+            "method": k.Method,
+            "class": k.Class,
+        }.get(self.kind, k.Variable)
 
 
 @dataclass(frozen=True)
@@ -196,6 +233,98 @@ def _target_name(src: bytes, node: Node) -> str | None:
     return None
 
 
+def _call_name(src: bytes, node: Node) -> str | None:
+    """Callee name of a ``call`` node when it is ``f(...)`` or ``pkg::f(...)``."""
+    fn = node.child_by_field_name("function")
+    if fn is None:
+        return None
+    if fn.type == "identifier":
+        return _decode(src, fn)
+    if fn.type == "namespace_operator":
+        rhs = fn.child_by_field_name("rhs")
+        return _decode(src, rhs) if rhs is not None else None
+    return None
+
+
+def _string_value(src: bytes, node: Node) -> str | None:
+    if node.type != "string":
+        return None
+    content = next((c for c in node.children if c.type == "string_content"), None)
+    return _decode(src, content) if content is not None else ""
+
+
+def _string_list(src: bytes, node: Node) -> list[str] | None:
+    """Strings in ``"A"``, ``c("A", "B")`` or ``signature("A", x = "B")``."""
+    single = _string_value(src, node)
+    if single is not None:
+        return [single]
+    if node.type == "call" and _call_name(src, node) in ("c", "signature"):
+        args = node.child_by_field_name("arguments")
+        if args is None:
+            return None
+        out: list[str] = []
+        for a in args.children:
+            if a.type != "argument":
+                continue
+            value = a.child_by_field_name("value")
+            sv = _string_value(src, value) if value is not None else None
+            if sv is None:
+                return None
+            out.append(sv)
+        return out
+    return None
+
+
+@dataclass(frozen=True)
+class DefinerCall:
+    """A ``setClass("Foo", ...)`` / ``setGeneric`` / ``setMethod`` / ``R6Class`` call."""
+
+    kind: str  # "class", "function" (generic) or "method"
+    name: str
+    name_node: Node
+    signature: tuple[str, ...] = ()
+
+    @property
+    def disambiguator(self) -> str | None:
+        return ",".join(self.signature) if self.kind == "method" else None
+
+
+def _definer_call(src: bytes, node: Node) -> DefinerCall | None:
+    if node.type != "call":
+        return None
+    callee = _call_name(src, node)
+    if callee is None:
+        return None
+    if callee in CLASS_DEFINERS:
+        kind = "class"
+    elif callee in GENERIC_DEFINERS:
+        kind = "function"
+    elif callee in METHOD_DEFINERS:
+        kind = "method"
+    else:
+        return None
+    args = node.child_by_field_name("arguments")
+    if args is None:
+        return None
+    positional = [a for a in args.children if a.type == "argument"]
+    if not positional:
+        return None
+    first = positional[0].child_by_field_name("value")
+    if first is None:
+        return None
+    name = _string_value(src, first)
+    if name is None:
+        return None
+    signature: tuple[str, ...] = ()
+    if kind == "method":
+        sig_node = positional[1].child_by_field_name("value") if len(positional) > 1 else None
+        sig = _string_list(src, sig_node) if sig_node is not None else None
+        if sig is None:
+            return None
+        signature = tuple(sig)
+    return DefinerCall(kind=kind, name=name, name_node=first, signature=signature)
+
+
 def _assignment_parts(src: bytes, node: Node) -> Assignment | None:
     """If ``node`` is ``name <op> value`` (or ``value -> name``) with a
     simple name on the target side, describe it; else ``None``.
@@ -223,9 +352,22 @@ def _assignment_parts(src: bytes, node: Node) -> Assignment | None:
     return Assignment(target=target, name=name, value=value)
 
 
+def _symbol_key(kind: str, name: str, disambiguator: str | None = None) -> str:
+    """Key into the top-level table. Plain names (functions and values) are
+    keyed by name alone, since that is what call sites use; classes and S4
+    methods live in separate namespaces in R and are keyed with a prefix."""
+    if kind == "class":
+        return f"class:{name}"
+    if kind == "method":
+        return f"method:{name}({disambiguator or ''})"
+    return name
+
+
 def collect_top_level_symbols(files: list[Path]) -> dict[str, TopLevelSymbol]:
     """Pass 1: find every ``name <- value`` at module top level, across all
-    files, so cross-file calls within the package resolve correctly.
+    files, so cross-file calls within the package resolve correctly. Also
+    registers ``setClass``/``setRefClass``/``R6Class`` (classes),
+    ``setGeneric`` (functions) and ``setMethod`` (methods) calls.
 
     When a name is defined in more than one file the last file (in sorted
     order) wins, mirroring R's "last source wins" collation behaviour.
@@ -237,17 +379,28 @@ def collect_top_level_symbols(files: list[Path]) -> dict[str, TopLevelSymbol]:
         src = path.read_bytes()
         tree = parser.parse(src)
         for stmt in tree.root_node.children:
+            sig_line = src[stmt.start_byte : stmt.end_byte].split(b"\n")[0]
+            if len(sig_line) > 120:
+                sig_line = sig_line[:117] + b"..."
             chain: list[Assignment] = []
             node = stmt
             while (parts := _assignment_parts(src, node)) is not None:
                 chain.append(parts)
                 node = parts.value
+            definer = _definer_call(src, node)
+            if definer is not None:
+                key = _symbol_key(definer.kind, definer.name, definer.disambiguator)
+                symbols[key] = TopLevelSymbol(
+                    name=definer.name,
+                    kind=definer.kind,
+                    signature=sig_line.decode("utf-8", "replace"),
+                    file=path,
+                    range=_node_range(definer.name_node),
+                    disambiguator=definer.disambiguator,
+                )
             if not chain:
                 continue
             kind = "function" if node.type == "function_definition" else "value"
-            sig_line = src[stmt.start_byte : stmt.end_byte].split(b"\n")[0]
-            if len(sig_line) > 120:
-                sig_line = sig_line[:117] + b"..."
             for a in chain:
                 symbols[a.name] = TopLevelSymbol(
                     name=a.name,
@@ -278,16 +431,13 @@ class DocumentIndexer:
         self.symbols_emitted: set[str] = set()
         self.guessed_positions: list[GuessedPosition] = []
         self._counter = LocalCounter()
+        self._enclosing: str | None = None
 
     def text(self, node: Node) -> str:
         return _decode(self.src, node)
 
     def top_level_symbol_string(self, sym: TopLevelSymbol) -> str:
-        return symbol_string(
-            self.package.name,
-            self.package.version,
-            descriptor_for(sym.name, is_function=sym.is_function),
-        )
+        return symbol_string(self.package.name, self.package.version, sym.descriptor)
 
     def emit_occurrence(self, node: Node, symbol: str, roles: int = 0) -> None:
         occ = self.document.occurrences.add()
@@ -303,11 +453,16 @@ class DocumentIndexer:
             info = self.document.symbols.add()
             info.symbol = symbol
             info.documentation.append(sym.signature)
-            info.kind = (
-                scip.SymbolInformation.Kind.Function
-                if sym.is_function
-                else scip.SymbolInformation.Kind.Variable
-            )
+            info.kind = sym.scip_kind
+            if sym.kind == "method":
+                # An S4 method implements its generic. When the generic is
+                # defined in this package we can say so statically; for
+                # external generics `scip-r resolve` fills the relationship in.
+                generic = self.top_level.get(sym.name)
+                if generic is not None and generic.is_function:
+                    rel = info.relationships.add()
+                    rel.symbol = self.top_level_symbol_string(generic)
+                    rel.is_implementation = True
 
     def note_external(self, ref: ExternalRef) -> None:
         self.external_refs.setdefault(ref.symbol, ref)
@@ -328,7 +483,12 @@ class DocumentIndexer:
             parts = _assignment_parts(self.src, node)
             if parts is not None:
                 self._handle_assignment(parts, scope)
-                self.walk(parts.value, scope)
+                if scope is None and parts.value.type == "function_definition":
+                    self._enclosing = parts.name
+                    self.walk(parts.value, scope)
+                    self._enclosing = None
+                else:
+                    self.walk(parts.value, scope)
                 return
             # fall through to generic recursion for non-assignment binary ops
 
@@ -405,6 +565,13 @@ class DocumentIndexer:
         self.emit_occurrence(name_node, ref.symbol)
 
     def _walk_call(self, node: Node, scope: Scope | None) -> None:
+        if scope is None:
+            definer = _definer_call(self.src, node)
+            if definer is not None:
+                key = _symbol_key(definer.kind, definer.name, definer.disambiguator)
+                sym = self.top_level.get(key)
+                if sym is not None:
+                    self.emit_top_level_definition(sym, definer.name_node)
         fn = node.child_by_field_name("function")
         args = node.child_by_field_name("arguments")
         if fn is not None:
@@ -453,12 +620,17 @@ class DocumentIndexer:
         if is_call:
             # Unresolved call target: guess it's base/stats R. Flagged as a
             # guess in the emitted documentation, not asserted as fact. Also
-            # recorded by (line, character) so a languageserver-based pass
-            # (see actions/ls-resolve/ls_index.R) can replace the guess with
-            # a real answer without re-resolving every token in the file.
+            # recorded with its name and enclosing function so a second pass
+            # (`scip-r resolve`, or any other consumer) can replace the guess.
             line, char = node.start_point
             self.guessed_positions.append(
-                {"file": self.relative_path, "line": line, "character": char}
+                {
+                    "file": self.relative_path,
+                    "line": line,
+                    "character": char,
+                    "name": name,
+                    "enclosing": self._enclosing,
+                }
             )
             ref = ExternalRef(GUESSED_PACKAGE, name, is_call=True, guessed=True)
             self.note_external(ref)
@@ -483,8 +655,8 @@ def build_index(
             directory of ``.R`` files also works; name/version then fall
             back to the directory name and ``0.0.0``.
         positions_out: if a list is passed, it is extended in place with
-            every guessed-external call site across the package, in the
-            shape ``ls_index.R`` expects: ``{"file", "line", "character"}``.
+            every guessed-external call site across the package as
+            ``{"file", "line", "character", "name", "enclosing"}``.
         tool_version: recorded in ``metadata.tool_info.version``; defaults
             to scip-r's own version.
 
