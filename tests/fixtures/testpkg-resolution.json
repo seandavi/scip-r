@@ -1,0 +1,209 @@
+{
+  "schema_version": 1,
+  "run_id": "0123456789abcdef0123456789abcdef",
+  "resolver": {
+    "name": "scip-r-resolve",
+    "version": "0.1.0"
+  },
+  "package": {
+    "name": "testpkg",
+    "version": "0.1.0",
+    "path": "/fixture/testpkg"
+  },
+  "environment": {
+    "timestamp_utc": "2026-09-12T00:00:00Z",
+    "duration_seconds": 0.1,
+    "r_version": "4.6.0",
+    "r_version_string": "R version 4.6.0 (2026-04-24)",
+    "platform": "x86_64-pc-linux-gnu",
+    "os": {
+      "sysname": "Linux",
+      "release": "6.0",
+      "machine": "x86_64"
+    },
+    "locale": "C",
+    "packages": {
+      "base": "4.6.0",
+      "codetools": "0.2.20",
+      "jsonlite": "2.0.0",
+      "methods": "4.6.0",
+      "pkgload": "1.5.3",
+      "R6": "2.6.1",
+      "stats": "4.6.0",
+      "testpkg": "0.1.0",
+      "utils": "4.6.0"
+    }
+  },
+  "summary": {
+    "names_resolved": 17,
+    "names_unresolved": 0,
+    "s3_methods": 1,
+    "s4_methods": 1,
+    "classes": 2
+  },
+  "resolutions": [
+    {
+      "name": "c",
+      "package": "base",
+      "version": "4.6.0",
+      "kind": "function",
+      "via": "base"
+    },
+    {
+      "name": "cat",
+      "package": "base",
+      "version": "4.6.0",
+      "kind": "function",
+      "via": "base"
+    },
+    {
+      "name": "if",
+      "package": "base",
+      "version": "4.6.0",
+      "kind": "function",
+      "via": "base"
+    },
+    {
+      "name": "invisible",
+      "package": "base",
+      "version": "4.6.0",
+      "kind": "function",
+      "via": "base"
+    },
+    {
+      "name": "length",
+      "package": "base",
+      "version": "4.6.0",
+      "kind": "function",
+      "via": "base"
+    },
+    {
+      "name": "list",
+      "package": "base",
+      "version": "4.6.0",
+      "kind": "function",
+      "via": "base"
+    },
+    {
+      "name": "mean",
+      "package": "base",
+      "version": "4.6.0",
+      "kind": "function",
+      "via": "base"
+    },
+    {
+      "name": "R6Class",
+      "package": "R6",
+      "version": "2.6.1",
+      "kind": "function",
+      "via": "imports"
+    },
+    {
+      "name": "representation",
+      "package": "methods",
+      "version": "4.6.0",
+      "kind": "function",
+      "via": "search"
+    },
+    {
+      "name": "sd",
+      "package": "stats",
+      "version": "4.6.0",
+      "kind": "function",
+      "via": "imports"
+    },
+    {
+      "name": "setClass",
+      "package": "methods",
+      "version": "4.6.0",
+      "kind": "function",
+      "via": "imports"
+    },
+    {
+      "name": "setGeneric",
+      "package": "methods",
+      "version": "4.6.0",
+      "kind": "function",
+      "via": "imports"
+    },
+    {
+      "name": "setMethod",
+      "package": "methods",
+      "version": "4.6.0",
+      "kind": "function",
+      "via": "imports"
+    },
+    {
+      "name": "standardGeneric",
+      "package": "base",
+      "version": "4.6.0",
+      "kind": "function",
+      "via": "base"
+    },
+    {
+      "name": "structure",
+      "package": "base",
+      "version": "4.6.0",
+      "kind": "function",
+      "via": "base"
+    },
+    {
+      "name": "winsorize",
+      "package": "testpkg",
+      "version": "0.1.0",
+      "kind": "function",
+      "via": "namespace"
+    },
+    {
+      "name": "zscore",
+      "package": "testpkg",
+      "version": "0.1.0",
+      "kind": "function",
+      "via": "namespace"
+    }
+  ],
+  "generics": [
+    {
+      "system": "S4",
+      "name": "width",
+      "package": "testpkg"
+    }
+  ],
+  "classes": [
+    {
+      "system": "S4",
+      "name": "Interval",
+      "package": "testpkg",
+      "contains": [],
+      "virtual": false
+    },
+    {
+      "system": "R6",
+      "name": "Counter",
+      "package": "testpkg",
+      "generator": "Counter",
+      "contains": [],
+      "virtual": false
+    }
+  ],
+  "methods": [
+    {
+      "system": "S3",
+      "generic": "print",
+      "generic_package": "base",
+      "generic_version": "4.6.0",
+      "class": "zresult",
+      "method": "print.zresult"
+    },
+    {
+      "system": "S4",
+      "generic": "width",
+      "generic_package": "testpkg",
+      "generic_version": "0.1.0",
+      "signature": [
+        "Interval"
+      ],
+      "method": null
+    }
+  ]
+}

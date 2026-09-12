@@ -15,28 +15,29 @@ def test_write_and_load_roundtrip(testpkg_index: scip.Index, tmp_path: Path) -> 
 
 def test_summarize_counts(testpkg_index: scip.Index) -> None:
     s = summarize(testpkg_index)
-    assert (s.tool_name, s.documents, s.symbols, s.occurrences) == ("scip-r", 2, 3, 42)
-    assert s.definitions == 13
-    assert s.references == 29
+    assert (s.tool_name, s.documents, s.symbols, s.occurrences) == ("scip-r", 3, 9, 69)
+    assert s.definitions == 23
+    assert s.references == 46
     assert s.definitions + s.references == s.occurrences
-    assert s.local_occurrences == 33
-    assert s.external_symbols == 4
-    assert s.guessed_external_symbols == 2
-    assert s.external_packages == {"base": 2, "stats": 2}
+    assert s.local_occurrences == 42
+    assert s.external_symbols == 15
+    assert s.guessed_external_symbols == 14
+    assert s.external_packages == {"base": 14, "stats": 1}
     assert [
         (d.relative_path, d.symbols, d.occurrences, d.definitions) for d in s.per_document
     ] == [
+        ("R/classes.R", 6, 26, 10),
         ("R/pipeline.R", 1, 11, 4),
-        ("R/stats_helpers.R", 2, 31, 9),
+        ("R/stats_helpers.R", 2, 32, 9),
     ]
 
 
 def test_summary_to_dict_and_one_line(testpkg_index: scip.Index) -> None:
     s = summarize(testpkg_index)
     d = s.to_dict()
-    assert d["documents"] == 2
-    assert d["per_document"][0]["relative_path"] == "R/pipeline.R"
-    assert s.one_line().startswith("2 documents, 3 defined symbols, 42 occurrences")
+    assert d["documents"] == 3
+    assert d["per_document"][0]["relative_path"] == "R/classes.R"
+    assert s.one_line().startswith("3 documents, 9 defined symbols, 69 occurrences")
 
 
 def test_summarize_empty_index() -> None:

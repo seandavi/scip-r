@@ -102,6 +102,7 @@ def test_metadata(testpkg_index: scip.Index, testpkg_dir: Path) -> None:
     assert md.project_root == testpkg_dir.resolve().as_uri()
     assert md.text_document_encoding == scip.TextEncoding.UTF8
     assert [d.relative_path for d in testpkg_index.documents] == [
+        "R/classes.R",
         "R/pipeline.R",
         "R/stats_helpers.R",
     ]
@@ -129,7 +130,7 @@ def test_cross_file_calls_resolve_to_package_symbols(testpkg_index: scip.Index) 
 
 
 def test_definition_role_and_symbol_information(testpkg_index: scip.Index) -> None:
-    doc = testpkg_index.documents[1]
+    doc = testpkg_index.documents[2]
     assert doc.relative_path == "R/stats_helpers.R"
     infos = {s.symbol: s for s in doc.symbols}
     assert set(infos) == {
@@ -150,7 +151,6 @@ def test_definition_role_and_symbol_information(testpkg_index: scip.Index) -> No
 
 def test_namespaced_calls_become_external_refs(testpkg_index: scip.Index) -> None:
     occ = symbols_at(testpkg_index, "R/stats_helpers.R")
-    assert occ["scip-r cran stats . sd()."] == [[3, 14, 16]]
     assert occ["scip-r cran stats . quantile()."] == [[9, 15, 23]]
 
 
@@ -162,14 +162,14 @@ def test_unresolved_calls_are_guessed_as_base(testpkg_index: scip.Index) -> None
 
 def test_external_symbols_sorted_and_documented(testpkg_index: scip.Index) -> None:
     ext = {s.symbol: s for s in testpkg_index.external_symbols}
-    assert list(ext) == [
-        "scip-r cran base . c().",
+    assert list(ext) == sorted(ext)
+    assert {
         "scip-r cran base . mean().",
+        "scip-r cran base . sd().",
         "scip-r cran stats . quantile().",
-        "scip-r cran stats . sd().",
-    ]
+    } <= set(ext)
     assert ext["scip-r cran base . mean()."].documentation == [f"base::mean  {GUESSED_NOTE}"]
-    assert ext["scip-r cran stats . sd()."].documentation == ["stats::sd"]
+    assert ext["scip-r cran stats . quantile()."].documentation == ["stats::quantile"]
     assert all(s.kind == scip.SymbolInformation.Kind.Function for s in ext.values())
 
 
@@ -198,10 +198,41 @@ def test_local_ids_are_unique_per_document(testpkg_index: scip.Index) -> None:
 def test_guessed_positions(testpkg_dir: Path) -> None:
     positions: list = []
     build_index(testpkg_dir, positions_out=positions)
-    assert positions == [
-        {"file": "R/stats_helpers.R", "line": 2, "character": 8},
-        {"file": "R/stats_helpers.R", "line": 8, "character": 33},
+    sh = [p for p in positions if p["file"] == "R/stats_helpers.R"]
+    assert sh == [
+        {
+            "file": "R/stats_helpers.R",
+            "line": 2,
+            "character": 8,
+            "name": "mean",
+            "enclosing": "zscore",
+        },
+        {
+            "file": "R/stats_helpers.R",
+            "line": 3,
+            "character": 7,
+            "name": "sd",
+            "enclosing": "zscore",
+        },
+        {
+            "file": "R/stats_helpers.R",
+            "line": 4,
+            "character": 2,
+            "name": "structure",
+            "enclosing": "zscore",
+        },
+        {
+            "file": "R/stats_helpers.R",
+            "line": 8,
+            "character": 33,
+            "name": "c",
+            "enclosing": "winsorize",
+        },
     ]
+    top = {p["name"] for p in positions if p["file"] == "R/classes.R" and p["enclosing"] is None}
+    assert {"setClass", "representation", "setGeneric", "setMethod", "R6Class"} <= top
+    assert "cat" not in top  # inside print.zresult, so enclosing is set
+    assert {p["enclosing"] for p in positions if p["name"] == "cat"} == {"print.zresult"}
 
 
 # --- targeted syntax cases ---------------------------------------------------
@@ -416,3 +447,111 @@ def test_destructuring_targets_are_walked_not_defined(make_package: MakePackage)
     assert ([0, 24, 25], "local 1", 0) in occ
     assert not any(sym == "local 2" for _, sym, _ in occ)
     assert [s.symbol for s in idx.external_symbols] == ["scip-r cran base . names()."]
+
+
+# --- S4 / R6 definitions ------------------------------------------------------
+
+
+def test_s4_class_generic_and_method_symbols(testpkg_index: scip.Index) -> None:
+    doc = testpkg_index.documents[0]
+    assert doc.relative_path == "R/classes.R"
+    infos = {s.symbol: s for s in doc.symbols}
+    K = scip.SymbolInformation.Kind
+    assert infos["scip-r cran testpkg 0.1.0 Interval#"].kind == K.Class
+    assert infos["scip-r cran testpkg 0.1.0 width()."].kind == K.Function
+    assert infos["scip-r cran testpkg 0.1.0 width(Interval)."].kind == K.Method
+    assert infos["scip-r cran testpkg 0.1.0 Counter#"].kind == K.Class
+    assert infos["scip-r cran testpkg 0.1.0 Counter."].kind == K.Variable
+    occ = symbols_at(testpkg_index, "R/classes.R")
+    assert occ["scip-r cran testpkg 0.1.0 Interval#"] == [[1, 9, 19]]  # the string literal
+    assert occ["scip-r cran testpkg 0.1.0 width()."] == [[3, 11, 18]]
+    assert occ["scip-r cran testpkg 0.1.0 width(Interval)."] == [[5, 10, 17]]
+    assert occ["scip-r cran testpkg 0.1.0 Counter#"] == [[14, 19, 28]]
+
+
+def test_s4_method_implements_local_generic(testpkg_index: scip.Index) -> None:
+    doc = testpkg_index.documents[0]
+    method = next(s for s in doc.symbols if s.symbol.endswith("width(Interval)."))
+    assert [(r.symbol, r.is_implementation) for r in method.relationships] == [
+        ("scip-r cran testpkg 0.1.0 width().", True)
+    ]
+    generic = next(s for s in doc.symbols if s.symbol.endswith(" width()."))
+    assert list(generic.relationships) == []
+
+
+def test_generic_calls_resolve_to_setgeneric_definition(make_package: MakePackage) -> None:
+    root = make_package(
+        {
+            "R/a.R": (
+                'setGeneric("area", function(x) standardGeneric("area"))\n'
+                "f <- function(s) area(s)\n"
+            )
+        }
+    )
+    idx = build_index(root)
+    occ = symbols_at(idx, "R/a.R")
+    assert occ["scip-r cran pkg 1.0.0 area()."] == [[0, 11, 17], [1, 17, 21]]
+
+
+def test_setmethod_signature_forms(make_package: MakePackage) -> None:
+    root = make_package(
+        {
+            "R/a.R": (
+                'setMethod("show", "Foo", function(object) NULL)\n'
+                'setMethod("combine", c("A", "B"), function(x, y) NULL)\n'
+                'setMethod("merge", signature(x = "A", y = "ANY"), function(x, y) NULL)\n'
+                'methods::setMethod("length", "Foo", function(x) 0L)\n'
+                'setMethod(dynamic_name, "Foo", function(x) NULL)\n'
+            )
+        }
+    )
+    idx = build_index(root)
+    syms = sorted(s.symbol for s in idx.documents[0].symbols)
+    assert syms == [
+        "scip-r cran pkg 1.0.0 combine(A,B).",
+        "scip-r cran pkg 1.0.0 length(Foo).",
+        "scip-r cran pkg 1.0.0 merge(A,ANY).",
+        "scip-r cran pkg 1.0.0 show(Foo).",
+    ]
+    # external generic: no static relationship (scip-r resolve adds it)
+    assert all(list(s.relationships) == [] for s in idx.documents[0].symbols)
+
+
+def test_setrefclass_and_r6class_define_classes(make_package: MakePackage) -> None:
+    root = make_package(
+        {
+            "R/a.R": (
+                'Acc <- setRefClass("Account", fields = list(b = "numeric"))\n'
+                'P <- R6::R6Class("Person")\n'
+            )
+        }
+    )
+    idx = build_index(root)
+    infos = {s.symbol: s.kind for s in idx.documents[0].symbols}
+    K = scip.SymbolInformation.Kind
+    assert infos["scip-r cran pkg 1.0.0 Account#"] == K.Class
+    assert infos["scip-r cran pkg 1.0.0 Person#"] == K.Class
+    assert infos["scip-r cran pkg 1.0.0 Acc."] == K.Variable
+
+
+def test_definer_calls_inside_functions_are_not_definitions(make_package: MakePackage) -> None:
+    root = make_package({"R/a.R": 'f <- function() setClass("Late")\n'})
+    idx = build_index(root)
+    assert [s.symbol for s in idx.documents[0].symbols] == ["scip-r cran pkg 1.0.0 f()."]
+
+
+def test_enclosing_function_in_positions(make_package: MakePackage) -> None:
+    root = make_package(
+        {
+            "R/a.R": (
+                "top()\nf <- function() inner()\ng = function() { h <- function() deep(); h() }\n"
+            )
+        }
+    )
+    positions: list = []
+    build_index(root, positions_out=positions)
+    assert [(p["name"], p["enclosing"]) for p in positions] == [
+        ("top", None),
+        ("inner", "f"),
+        ("deep", "g"),
+    ]
