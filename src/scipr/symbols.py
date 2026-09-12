@@ -3,29 +3,39 @@
 SCIP treats the symbol string as opaque. scip-r uses this shape for
 package-level and external symbols::
 
-    scip-r cran <package> <version> <descriptor>
+    scip-r <manager> <package> <version> <descriptor>
 
-where ``<descriptor>`` is one of
+``<manager>`` is ``cran``, ``bioconductor``, ``r`` (ships with R) or ``.``
+when unknown (external references seen only from source). ``<version>`` is
+``.`` when unknown. ``<descriptor>`` is one of
 
 - ``name().`` for functions,
 - ``name(Sig).`` for S4 methods, with the signature classes joined by ``,``
-  as the disambiguator (``width(Interval).``, ``show(A,B).``),
+  as the disambiguator (``width(Interval).``, ``show(A,B).``); trailing
+  ``ANY`` classes are dropped so ``merge(A)`` and ``merge(A,ANY)`` agree,
 - ``name#`` for classes (S4, reference and R6),
-- ``name.`` for other top-level objects,
+- ``Class#name().`` / ``Class#name.`` for R6 and reference-class methods
+  and fields,
+- ``name.`` for other top-level objects.
 
-and ``<version>`` is ``.`` when unknown (external references resolved from
-source alone). Locals use SCIP's own ``local N`` convention and are only
-meaningful within one document.
+Locals use SCIP's own ``local N`` convention and are only meaningful within
+one document.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 SCHEME = "scip-r"
 MANAGER = "cran"
 UNKNOWN_VERSION = "."
+UNKNOWN_MANAGER = "."
+
+_DESCRIPTOR_RE = re.compile(
+    r"^(?P<name>.*?)(?:\((?P<disamb>[^()]*)\)(?P<suffix>\.)|(?P<suffix2>[.#]))$"
+)
 
 
 @dataclass(frozen=True)
@@ -41,7 +51,7 @@ class ParsedSymbol:
     descriptor: str | None = None
 
     def _split(self) -> tuple[str, str | None, str] | None:
-        """``(name, disambiguator, suffix)`` or None for locals/unknown."""
+        """``(qualified name, disambiguator, suffix)`` or None for locals/unknown."""
         if self.descriptor is None:
             return None
         m = _DESCRIPTOR_RE.match(self.descriptor)
@@ -52,10 +62,26 @@ class ParsedSymbol:
         return m.group("name"), None, m.group("suffix2")
 
     @property
-    def name(self) -> str | None:
-        """Bare name with the descriptor suffix and disambiguator stripped."""
+    def qualified_name(self) -> str | None:
+        """Name with any ``Owner#`` prefix kept (``Counter#add``)."""
         parts = self._split()
         return None if parts is None else parts[0]
+
+    @property
+    def name(self) -> str | None:
+        """Bare name: suffix, disambiguator and ``Owner#`` prefix stripped."""
+        q = self.qualified_name
+        if q is None:
+            return None
+        return q.rsplit("#", 1)[-1] if "#" in q else q
+
+    @property
+    def owner(self) -> str | None:
+        """Owning class of an R6/RC member (``Counter`` in ``Counter#add().``)."""
+        q = self.qualified_name
+        if q is None or "#" not in q:
+            return None
+        return q.rsplit("#", 1)[0]
 
     @property
     def disambiguator(self) -> str | None:
@@ -70,7 +96,13 @@ class ParsedSymbol:
 
     @property
     def is_method(self) -> bool:
+        """S4 method (``generic(Sig).``)."""
         return self.is_function and self.disambiguator is not None
+
+    @property
+    def is_member(self) -> bool:
+        """R6 / reference-class method or field (``Class#name``)."""
+        return self.owner is not None
 
     @property
     def is_class(self) -> bool:
@@ -83,27 +115,42 @@ class ParsedSymbol:
         return not self.is_local and self.version == UNKNOWN_VERSION
 
 
-_DESCRIPTOR_RE = re.compile(
-    r"^(?P<name>.*?)(?:\((?P<disamb>[^()]*)\)(?P<suffix>\.)|(?P<suffix2>[.#]))$"
-)
-
-
-def symbol_string(package: str, version: str, descriptor: str, *, scheme: str = SCHEME) -> str:
+def symbol_string(
+    package: str,
+    version: str,
+    descriptor: str,
+    *,
+    manager: str = MANAGER,
+    scheme: str = SCHEME,
+) -> str:
     """Build a package-level symbol string in scip-r's convention."""
-    return f"{scheme} {MANAGER} {package} {version} {descriptor}"
+    return f"{scheme} {manager} {package} {version} {descriptor}"
 
 
 def descriptor_for(name: str, *, is_function: bool) -> str:
     return f"{name}()." if is_function else f"{name}."
 
 
-def method_descriptor(generic: str, signature: list[str] | tuple[str, ...]) -> str:
+def normalize_signature(signature: Sequence[str]) -> tuple[str, ...]:
+    """Drop trailing ``ANY`` classes (R pads them in its method tables)."""
+    sig = list(signature)
+    while len(sig) > 1 and sig[-1] == "ANY":
+        sig.pop()
+    return tuple(sig)
+
+
+def method_descriptor(generic: str, signature: Sequence[str]) -> str:
     """Descriptor for an S4 method: ``generic(Class1,Class2).``"""
-    return f"{generic}({','.join(signature)})."
+    return f"{generic}({','.join(normalize_signature(signature))})."
 
 
 def class_descriptor(name: str) -> str:
     return f"{name}#"
+
+
+def member_descriptor(owner: str, name: str, *, is_function: bool) -> str:
+    """Descriptor for an R6/RC member: ``Owner#name().`` or ``Owner#name.``"""
+    return f"{owner}#{descriptor_for(name, is_function=is_function)}"
 
 
 def parse_symbol(symbol: str) -> ParsedSymbol:
