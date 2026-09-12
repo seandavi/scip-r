@@ -11,7 +11,7 @@ inputs:
   positions-file:
     description: >
       Path to a JSON file listing call-site positions to resolve, produced
-      by the tree-sitter pass (scip-r --emit-positions). If omitted, the
+      by the tree-sitter pass (scip-r index --emit-positions). If omitted, the
       action derives positions itself via textDocument/documentSymbol only
       (definitions, no call resolution).
     required: false

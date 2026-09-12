@@ -1,147 +1,215 @@
 # scip-r
 
+[![CI](https://github.com/seandavi/scip-r/actions/workflows/ci.yml/badge.svg)](https://github.com/seandavi/scip-r/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+
 A static [SCIP](https://github.com/scip-code/scip) indexer for R packages.
-No R installation, no `library()` calls, no running code — it parses R
+No R installation, no `library()` calls, no running code: it parses R
 source with [tree-sitter-r](https://github.com/r-lib/tree-sitter-r) and
 emits an `index.scip` file that any SCIP consumer (Sourcegraph, `scip
-print`/`scip stats`, or a custom DuckDB/Parquet pipeline) can read.
+print`/`scip stats`, or your own DuckDB/Parquet pipeline) can read.
 
 This fills a real gap: the [official SCIP indexer
 list](https://github.com/scip-code/scip#tools-using-scip) covers Java,
-TypeScript, Rust, C/C++, Ruby, Python, C#, Dart, and PHP — there is no R
-indexer, static or otherwise. This is a first pass at one.
+TypeScript, Rust, C/C++, Ruby, Python, C#, Dart, and PHP, and has no R
+indexer, static or otherwise.
+
+```bash
+scip-r index path/to/pkg -o index.scip --stats
+scip-r stats index.scip
+scip-r export index.scip --format duckdb
+```
 
 ## What it extracts
 
 - Top-level `name <- value` / `name = value` definitions (functions and
-  plain objects), resolved **across files in the same package** — a call
+  plain objects), resolved **across files in the same package**: a call
   in `R/pipeline.R` to a function defined in `R/helpers.R` resolves
   correctly.
-- Function parameters and in-body assignments, as SCIP "local" symbols
-  scoped to that one function.
+- Function parameters, `for`-loop variables and in-body assignments, as
+  SCIP "local" symbols scoped to that one function.
 - `pkg::fun(...)` / `pkg:::fun(...)` calls, emitted as references to
   synthetic external symbols (so you get *something* to hover/navigate to
   even without indexing the target package separately).
 - Unqualified calls that don't resolve to a local or a package symbol are
-  recorded as calls into a synthetic `base` package — this is a **guess**,
+  recorded as calls into a synthetic `base` package. This is a **guess**,
   not a semantic fact (see Limitations), and is labeled as such in the
   emitted documentation string on that symbol.
 
-## What it does NOT do
+## What it does not do
 
 This is a syntax-directed pass, not a compiler frontend. It has no model
-of R's actual runtime name resolution, so it cannot and does not attempt:
+of R's runtime name resolution, so it does not attempt:
 
 - **S3/S4/R6 method dispatch.** `setMethod("show", "MyClass", ...)` is
-  visible as a call to `setMethod`, but resolving *which* `show` a given
-  call site actually dispatches to at runtime requires evaluating class
-  hierarchies — that needs R, not a parser.
+  visible as a call to `setMethod`, but resolving *which* `show` a call
+  site dispatches to at runtime requires evaluating class hierarchies.
 - **`library()`/`require()`-driven scope changes.** If a package attaches
-  `dplyr` and calls `filter()` unqualified, this tool has no way to know
-  that without a static list of what's attached, and doesn't attempt one.
-  Those calls fall into the "guessed base" bucket, which is honestly
-  telling you "unqualified call, unresolved" more than "this is base R."
-- **NSE-aware argument matching** (e.g. `dplyr` verbs, formula-based APIs).
+  `dplyr` and calls `filter()` unqualified, this tool cannot know that
+  from source alone. Those calls fall into the "guessed base" bucket,
+  which really means "unqualified call, unresolved".
+- **NSE-aware argument matching** (`dplyr` verbs, formula-based APIs).
 - **Version-pinned external symbols.** `pkg::fun` references use `.` as
-  the version because source alone doesn't tell you which version of
-  `pkg` is installed or intended.
+  the version because source alone doesn't say which version of `pkg` is
+  intended.
 
 If your use case needs true go-to-definition across dispatch, you need
-something that runs R (e.g. wrapping the `languageserver` package, which
-already does live semantic analysis, and having it emit SCIP in batch
-mode instead of serving LSP requests interactively). This tool is the
-cheap, no-R-runtime alternative — good for ecosystem-wide static analytics
-(call graphs, deprecated-API usage, cross-package reference counts) where
+something that runs R; see [`actions/ls-resolve/`](actions/ls-resolve/)
+for an optional, R-based second pass. scip-r itself is the cheap,
+no-R-runtime alternative, good for ecosystem-wide static analytics (call
+graphs, deprecated-API usage, cross-package reference counts) where
 approximate resolution across thousands of packages beats perfect
 resolution on one.
 
 ## Install
 
-`tree-sitter-r` has no published PyPI wheel, so build it from source once
-(needs `gcc` and `git`, no R required):
+`tree-sitter-r` ships Python bindings in its repository but has no PyPI
+release, so it is installed from its git tag. You need a C compiler
+(`gcc`/`clang`) and `git`; no R is required.
+
+With [uv](https://docs.astral.sh/uv/):
 
 ```bash
-git clone https://github.com/r-lib/tree-sitter-r.git
-pip install ./tree-sitter-r
-pip install .   # this package
+uv tool install "scip-r[export] @ git+https://github.com/seandavi/scip-r" \
+    --with "tree-sitter-r @ git+https://github.com/r-lib/tree-sitter-r@v1.3.0"
 ```
 
-A prebuilt Linux x86_64 wheel for `tree-sitter-r` is included under
-`dist/` as a convenience if you're on that platform and don't want to
-build it yourself.
-
-## Use
+With pip:
 
 ```bash
-scip-r /path/to/some/R/package -o index.scip --stats
+pip install "tree-sitter-r @ git+https://github.com/r-lib/tree-sitter-r@v1.3.0"
+pip install "scip-r[export] @ git+https://github.com/seandavi/scip-r"
 ```
 
-`path/to/some/R/package` should be a package root (has `DESCRIPTION` and
-an `R/` directory). Only files under `R/` are indexed — `tests/`,
-`vignettes/`, `src/` (compiled code) are out of scope for this pass.
+Drop `[export]` if you don't need the Parquet/DuckDB writers.
 
-Inspect the result with the official `scip` CLI:
+## Usage
+
+### `scip-r index`
 
 ```bash
-scip print --from index.scip
-scip stats --from index.scip
+scip-r index path/to/pkg -o index.scip --stats
+```
+
+`path/to/pkg` should be a package root (has `DESCRIPTION` and an `R/`
+directory). Only files under `R/` are indexed; `tests/`, `vignettes/`
+and `src/` are out of scope. Add `--emit-positions positions.json` to
+also dump every guessed call site for the languageserver pass below.
+
+### `scip-r stats` and `scip-r print`
+
+```bash
+scip-r stats index.scip            # counts per index and per document
+scip-r stats index.scip --json
+scip-r print index.scip --no-locals  # readable dump, like `scip print`
+scip-r print index.scip --json       # protobuf JSON
+```
+
+The official [`scip` CLI](https://github.com/scip-code/scip) works on the
+output too: `scip print --from index.scip`, `scip stats --from index.scip`.
+
+### `scip-r export`: Parquet and DuckDB
+
+Requires the `export` extra.
+
+```bash
+scip-r export index.scip --format parquet -o index-parquet/
+scip-r export index.scip --format duckdb  -o index.duckdb [--overwrite]
+```
+
+Both produce the same six tables: `metadata`, `documents`, `symbols`,
+`external_symbols`, `occurrences`, `relationships`. Every symbol-bearing
+row also carries the symbol string pre-parsed into `package`, `version`,
+`name`, `is_function`, `is_local` columns, so queries don't need to
+split strings:
+
+```sql
+-- who calls what, ignoring locals and definitions
+select o.relative_path, o.package, o.name, count(*) as n
+from occurrences o
+where not o.is_local and not o.is_definition
+group by all order by n desc;
+
+-- which external packages does this package lean on?
+select package, count(*) from external_symbols
+where not guessed group by 1;
+```
+
+Column definitions are in the [`scipr.export`](src/scipr/export.py)
+module docstring.
+
+### Python API
+
+```python
+from scipr import build_index, summarize, write_index
+from scipr.export import index_to_rows, write_parquet
+
+index = build_index("path/to/pkg")  # scip_pb2.Index
+print(summarize(index).one_line())
+write_index(index, "index.scip")
+rows = index_to_rows(index)  # {table: [dict, ...]}, no extras needed
+write_parquet(index, "index-parquet/")  # needs scip-r[export]
 ```
 
 ## Symbol scheme
 
 Package-level: `scip-r cran <package> <version> <name>().` (functions) or
 `scip-r cran <package> <version> <name>.` (non-function top-level
-objects). External references use the same shape with the calling
-package's own version replaced by `.` since it's unknown from source.
-Locals use SCIP's own `local N` convention, scoped per-document.
+objects). External references use the same shape with the version
+replaced by `.` since it's unknown from source. Locals use SCIP's own
+`local N` convention, scoped per document.
 
-This is a project-specific convention, not part of the SCIP spec itself —
+This is a project-specific convention, not part of the SCIP spec itself.
 SCIP treats the symbol string as opaque and human-readable, so any
-consistent scheme is valid.
+consistent scheme is valid. `scipr.symbols.parse_symbol` turns one back
+into its parts.
 
 ## Optional: resolving call sites via a real R session (CI)
 
-The tree-sitter pass above guesses that an unqualified call like `mean(x)`
-resolves to base/attached R — it's a guess, not a fact, and is labeled as
-such. `.github-action/` has a second, **untested** piece that closes that
-gap by actually asking a live R session:
+The tree-sitter pass guesses that an unqualified call like `mean(x)`
+resolves to base/attached R. [`actions/ls-resolve/`](actions/ls-resolve/)
+holds a second, **untested** piece that closes the gap by asking a live R
+session:
 
-- `scip-r ... --emit-positions positions.json` writes out every guessed
-  call site (only the guessed ones, not every token) as `{file, line,
-  character}`.
-- `.github-action/ls_index.R` spawns `Rscript -e 'languageserver::run()'`,
-  speaks LSP over its stdio (Content-Length-framed JSON-RPC — there's no
-  public batch API to call instead, `languageserver`'s internals are
-  unexported R6 classes), and asks `textDocument/definition` at each of
-  those positions.
-- `.github-action/action.yml` is a composite GitHub Action that runs this
-  as a CI step (`r-lib/actions/setup-r` + `setup-r-dependencies`, then the
-  script, then `upload-artifact`) — meant to sit alongside an existing
-  r-universe build/check workflow.
+- `scip-r index ... --emit-positions positions.json` writes out every
+  guessed call site (only the guessed ones, not every token) as
+  `{file, line, character}`.
+- `ls_index.R` spawns `Rscript -e 'languageserver::run()'`, speaks LSP
+  over its stdio, and asks `textDocument/definition` at each position.
+- `action.yml` is a composite GitHub Action that runs this as a CI step
+  (`r-lib/actions/setup-r` + `setup-r-dependencies`, then the script,
+  then `upload-artifact`), meant to sit alongside an r-universe
+  build/check workflow.
 
 Two things worth knowing before wiring this into CI:
 
 1. **It resolves within-package calls reliably** (the full `R/` tree is on
-   disk). Cross-package resolution — a call into a dependency — only
-   works if that dependency was installed **with source references kept**
+   disk). Cross-package resolution only works if that dependency was
+   installed **with source references kept**
    (`options(keep.source.pkgs = TRUE)`), which most RSPM/binary-cached CI
-   installs skip for speed. Without it, dependency calls will often come
-   back with no location, same as today.
-2. **It's not fast.** The driver is written for correctness (one blocking
-   request at a time) not throughput. GEOquery — a fairly ordinary
-   mid-size Bioconductor package — has **1,186 guessed call sites**, i.e.
-   1,186 sequential round-trips to resolve fully. Budget CI time (or add
-   a cap on how many positions get resolved per run) accordingly.
+   installs skip.
+2. **It's not fast.** One blocking request per guessed position. A
+   mid-size Bioconductor package can have over a thousand of them.
 
-This half of the project has not been run against a real R session — I
-had no R runtime available to verify it. Treat the wire framing and
-request shapes as spec-correct, but test `ls_index.R` locally before
-trusting it in a CI pipeline.
+This half has not been run against a real R session. Treat the wire
+framing and request shapes as spec-correct, but test `ls_index.R`
+locally before trusting it in a pipeline.
 
-## Architecture note
+## Development
 
-This was built to slot into a DuckDB/Parquet-over-object-storage pipeline:
-SCIP's `Document`/`SymbolInformation`/`Occurrence` messages are naturally
-tabular, so `index.scip` converts cleanly into a few Parquet tables
-(documents, symbols, occurrences) for querying with DuckDB or DuckDB-WASM,
-the same pattern used for other zero-backend, R2-hosted analytics here.
+```bash
+uv sync --all-extras
+uv run pytest
+uv run ruff check . && uv run mypy
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the layout, how to add a
+parser rule, and how to regenerate the golden index or the protobuf
+bindings.
+
+## License
+
+scip-r is released under the [MIT License](LICENSE). It bundles the SCIP
+protocol definition (Apache-2.0, Sourcegraph) and links against
+tree-sitter-r (MIT); see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
