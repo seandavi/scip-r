@@ -4,21 +4,59 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 
-A static [SCIP](https://github.com/scip-code/scip) indexer for R packages.
-No R installation, no `library()` calls, no running code: it parses R
-source with [tree-sitter-r](https://github.com/r-lib/tree-sitter-r) and
-emits an `index.scip` file that any SCIP consumer (Sourcegraph, `scip
-print`/`scip stats`, or your own DuckDB/Parquet pipeline) can read.
+**scip-r reads the source code of an R package and writes down, for every
+function and object it defines and every call it makes, *what* is defined
+or called and *where*.** It does this by parsing the text of the `.R`
+files, not by running them, so it works on any package without installing
+R, the package, or its dependencies. The result is a small
+[SCIP](https://github.com/scip-code/scip) index file, an open format for
+code intelligence that tools like Sourcegraph and DuckDB can read.
 
-This fills a real gap: the [official SCIP indexer
+## What is this for?
+
+Think of the output as a queryable map of an R codebase. Questions it
+lets you answer, at the scale of one package or all of CRAN and
+Bioconductor:
+
+- **"Who uses this?"** Find every package that calls `stats::sd`, a
+  deprecated function, or a function you are about to change. Count how
+  many call sites would break.
+- **"What does this package depend on, really?"** Not what `DESCRIPTION`
+  claims, but which functions from which packages the code actually
+  calls, and how often.
+- **"Where is this defined?"** Jump from a call in `R/pipeline.R` to the
+  definition in `R/helpers.R`, across files, without opening R. Feed the
+  index to Sourcegraph or another SCIP consumer and get hover and
+  go-to-definition for R.
+- **"How is the ecosystem shaped?"** Build call graphs, measure API
+  surface, track adoption of a new function across thousands of
+  packages, or spot copy-pasted helpers. Export to Parquet and query with
+  DuckDB, or drop the files on object storage and query from a browser.
+- **"What changed?"** Index two versions of a package and diff the
+  symbol tables to see added, removed and renamed functions.
+
+It is the right tool when you need *approximate answers across many
+packages cheaply*. It is the wrong tool when you need *exactly* which
+method an S4 or R6 call dispatches to at runtime; that requires running
+R (see [Optional: resolving call sites via a real R
+session](#optional-resolving-call-sites-via-a-real-r-session-ci)).
+
+## Why does it exist?
+
+The [official SCIP indexer
 list](https://github.com/scip-code/scip#tools-using-scip) covers Java,
-TypeScript, Rust, C/C++, Ruby, Python, C#, Dart, and PHP, and has no R
-indexer, static or otherwise.
+TypeScript, Rust, C/C++, Ruby, Python, C#, Dart, and PHP. There is no R
+indexer, static or otherwise. scip-r fills that gap with the cheapest
+approach that gives useful answers: a syntax-directed pass over
+[tree-sitter-r](https://github.com/r-lib/tree-sitter-r) parse trees.
+
+## Quick start
 
 ```bash
-scip-r index path/to/pkg -o index.scip --stats
-scip-r stats index.scip
-scip-r export index.scip --format duckdb
+scip-r index path/to/pkg -o index.scip --stats   # parse R/ and write the index
+scip-r stats index.scip                          # what did we find?
+scip-r print index.scip --no-locals              # readable dump
+scip-r export index.scip --format duckdb         # then query it with SQL
 ```
 
 ## What it extracts
