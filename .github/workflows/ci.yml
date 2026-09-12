@@ -63,7 +63,7 @@ jobs:
           test "$(grep -c '' batch-out/summary.jsonl)" -eq 2
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-xml
           path: coverage.xml
@@ -121,7 +121,7 @@ jobs:
           uv pip install --python /tmp/venv "tree-sitter-r @ git+https://github.com/r-lib/tree-sitter-r@v1.3.0"
           uv pip install --python /tmp/venv dist/*.whl
           /tmp/venv/bin/scip-r --version
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
