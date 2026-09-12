@@ -15,11 +15,11 @@ def test_write_and_load_roundtrip(testpkg_index: scip.Index, tmp_path: Path) -> 
 
 def test_summarize_counts(testpkg_index: scip.Index) -> None:
     s = summarize(testpkg_index)
-    assert (s.tool_name, s.documents, s.symbols, s.occurrences) == ("scip-r", 2, 3, 45)
+    assert (s.tool_name, s.documents, s.symbols, s.occurrences) == ("scip-r", 2, 3, 42)
     assert s.definitions == 13
-    assert s.references == 32
+    assert s.references == 29
     assert s.definitions + s.references == s.occurrences
-    assert s.local_occurrences == 36
+    assert s.local_occurrences == 33
     assert s.external_symbols == 4
     assert s.guessed_external_symbols == 2
     assert s.external_packages == {"base": 2, "stats": 2}
@@ -27,7 +27,7 @@ def test_summarize_counts(testpkg_index: scip.Index) -> None:
         (d.relative_path, d.symbols, d.occurrences, d.definitions) for d in s.per_document
     ] == [
         ("R/pipeline.R", 1, 11, 4),
-        ("R/stats_helpers.R", 2, 34, 9),
+        ("R/stats_helpers.R", 2, 31, 9),
     ]
 
 
@@ -36,7 +36,7 @@ def test_summary_to_dict_and_one_line(testpkg_index: scip.Index) -> None:
     d = s.to_dict()
     assert d["documents"] == 2
     assert d["per_document"][0]["relative_path"] == "R/pipeline.R"
-    assert s.one_line().startswith("2 documents, 3 defined symbols, 45 occurrences")
+    assert s.one_line().startswith("2 documents, 3 defined symbols, 42 occurrences")
 
 
 def test_summarize_empty_index() -> None:

@@ -119,6 +119,7 @@ def index(
     write_index(idx, output)
 
     if emit_positions is not None and positions is not None:
+        emit_positions.parent.mkdir(parents=True, exist_ok=True)
         emit_positions.write_text(json.dumps(positions, indent=2) + "\n", encoding="utf-8")
         if stats:
             typer.echo(f"{emit_positions}: {len(positions)} guessed positions", err=True)

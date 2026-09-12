@@ -285,6 +285,7 @@ def write_duckdb(
 
     tables = index_to_arrow(index)
     counts: dict[str, int] = {}
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(str(db_path))
     try:
         for name, table in tables.items():

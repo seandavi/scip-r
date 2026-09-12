@@ -19,10 +19,10 @@ def test_index_to_rows_shape(testpkg_index: scip.Index) -> None:
         "relative_path": "R/stats_helpers.R",
         "language": "R",
         "n_symbols": 2,
-        "n_occurrences": 34,
+        "n_occurrences": 31,
     }
     assert len(rows["symbols"]) == 3
-    assert len(rows["occurrences"]) == 45
+    assert len(rows["occurrences"]) == 42
     assert len(rows["external_symbols"]) == 4
     assert rows["relationships"] == []
 
@@ -111,7 +111,7 @@ def test_index_to_arrow_schemas(testpkg_index: scip.Index) -> None:
 
     tables = index_to_arrow(testpkg_index)
     assert tuple(tables) == TABLES
-    assert tables["occurrences"].num_rows == 45
+    assert tables["occurrences"].num_rows == 42
     assert tables["occurrences"].schema.field("start_line").type == pa.int64()
     assert tables["symbols"].schema.field("documentation").type == pa.list_(pa.string())
     # empty tables still carry their schema
@@ -141,7 +141,7 @@ def test_write_parquet_roundtrip(testpkg_index: scip.Index, tmp_path: Path) -> N
     written = write_parquet(testpkg_index, tmp_path / "nested" / "out")
     assert set(written) == set(TABLES)
     occ = pq.read_table(written["occurrences"]).to_pylist()
-    assert len(occ) == 45
+    assert len(occ) == 42
     defs = [o for o in occ if o["is_definition"] and not o["is_local"]]
     assert sorted(o["name"] for o in defs) == ["run_pipeline", "winsorize", "zscore"]
     ext = pq.read_table(written["external_symbols"]).to_pylist()
@@ -165,7 +165,7 @@ def test_write_duckdb_and_query(testpkg_index: scip.Index, tmp_path: Path) -> No
         "documents": 2,
         "symbols": 3,
         "external_symbols": 4,
-        "occurrences": 45,
+        "occurrences": 42,
         "relationships": 0,
     }
     con = duckdb.connect(str(db), read_only=True)

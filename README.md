@@ -23,15 +23,17 @@ scip-r export index.scip --format duckdb
 
 ## What it extracts
 
-- Top-level `name <- value` / `name = value` definitions (functions and
-  plain objects), resolved **across files in the same package**: a call
-  in `R/pipeline.R` to a function defined in `R/helpers.R` resolves
-  correctly.
+- Top-level definitions via `<-`, `=`, `<<-`, `->`, `->>` and chained
+  assignment (functions and plain objects), including string-literal
+  targets like `"%+%" <- function(a, b)`, resolved **across files in the
+  same package**: a call in `R/pipeline.R` to a function defined in
+  `R/helpers.R` resolves correctly.
 - Function parameters, `for`-loop variables and in-body assignments, as
   SCIP "local" symbols scoped to that one function.
-- `pkg::fun(...)` / `pkg:::fun(...)` calls, emitted as references to
-  synthetic external symbols (so you get *something* to hover/navigate to
-  even without indexing the target package separately).
+- `pkg::fun(...)` / `pkg:::fun(...)` calls, and `pkg::name` used as a
+  value, emitted as references to synthetic external symbols (so you get
+  *something* to hover/navigate to even without indexing the target
+  package separately).
 - Unqualified calls that don't resolve to a local or a package symbol are
   recorded as calls into a synthetic `base` package. This is a **guess**,
   not a semantic fact (see Limitations), and is labeled as such in the

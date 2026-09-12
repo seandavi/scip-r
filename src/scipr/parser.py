@@ -45,6 +45,8 @@ ASSIGN_OPS = frozenset({"<-", "="})
 # a definition site the first time we see it, since tracking the *actual*
 # enclosing scope would require full lexical analysis.
 ASSIGN_OPS_ALL = ASSIGN_OPS | {"<<-"}
+# ``value -> name`` / ``value ->> name``: same thing with the sides swapped.
+RIGHT_ASSIGN_OPS = frozenset({"->", "->>"})
 
 R_SOURCE_SUFFIXES = frozenset({".R", ".r"})
 
@@ -173,9 +175,35 @@ def _decode(src: bytes, node: Node) -> str:
     return src[node.start_byte : node.end_byte].decode("utf-8", "replace")
 
 
-def _assignment_parts(node: Node) -> tuple[Node, Node] | None:
-    """If ``node`` is ``identifier <op> rhs`` with an assignment operator,
-    return ``(lhs, rhs)``; else ``None``."""
+@dataclass(frozen=True)
+class Assignment:
+    target: Node  # the node the definition occurrence is attached to
+    name: str
+    value: Node
+
+
+def _target_name(src: bytes, node: Node) -> str | None:
+    """Name bound by an assignment target: a bare identifier (backticked
+    names parse as identifiers too), or a string literal, which R accepts
+    for operator and replacement-function definitions such as
+    ``"%+%" <- function(a, b) ...`` and ``"foo<-" <- function(x, value) ...``.
+    """
+    if node.type == "identifier":
+        return _decode(src, node)
+    if node.type == "string":
+        content = next((c for c in node.children if c.type == "string_content"), None)
+        return _decode(src, content) if content is not None else None
+    return None
+
+
+def _assignment_parts(src: bytes, node: Node) -> Assignment | None:
+    """If ``node`` is ``name <op> value`` (or ``value -> name``) with a
+    simple name on the target side, describe it; else ``None``.
+
+    Not handled, by design: destructuring targets such as ``obj$field <- v``,
+    ``x[i] <- v`` or ``names(x) <- v``; those are walked as ordinary
+    expressions so the reads inside them are still recorded.
+    """
     if node.type != "binary_operator":
         return None
     op = node.child_by_field_name("operator")
@@ -183,9 +211,16 @@ def _assignment_parts(node: Node) -> tuple[Node, Node] | None:
     rhs = node.child_by_field_name("rhs")
     if op is None or lhs is None or rhs is None:
         return None
-    if op.type not in ASSIGN_OPS_ALL or lhs.type != "identifier":
+    if op.type in ASSIGN_OPS_ALL:
+        target, value = lhs, rhs
+    elif op.type in RIGHT_ASSIGN_OPS:
+        target, value = rhs, lhs
+    else:
         return None
-    return lhs, rhs
+    name = _target_name(src, target)
+    if name is None:
+        return None
+    return Assignment(target=target, name=name, value=value)
 
 
 def collect_top_level_symbols(files: list[Path]) -> dict[str, TopLevelSymbol]:
@@ -194,6 +229,7 @@ def collect_top_level_symbols(files: list[Path]) -> dict[str, TopLevelSymbol]:
 
     When a name is defined in more than one file the last file (in sorted
     order) wins, mirroring R's "last source wins" collation behaviour.
+    Chained assignments (``a <- b <- value``) define every name in the chain.
     """
     parser = Parser(R_LANGUAGE)
     symbols: dict[str, TopLevelSymbol] = {}
@@ -201,22 +237,25 @@ def collect_top_level_symbols(files: list[Path]) -> dict[str, TopLevelSymbol]:
         src = path.read_bytes()
         tree = parser.parse(src)
         for stmt in tree.root_node.children:
-            parts = _assignment_parts(stmt)
-            if parts is None:
+            chain: list[Assignment] = []
+            node = stmt
+            while (parts := _assignment_parts(src, node)) is not None:
+                chain.append(parts)
+                node = parts.value
+            if not chain:
                 continue
-            lhs, rhs = parts
-            name = _decode(src, lhs)
-            kind = "function" if rhs.type == "function_definition" else "value"
+            kind = "function" if node.type == "function_definition" else "value"
             sig_line = src[stmt.start_byte : stmt.end_byte].split(b"\n")[0]
             if len(sig_line) > 120:
                 sig_line = sig_line[:117] + b"..."
-            symbols[name] = TopLevelSymbol(
-                name=name,
-                kind=kind,
-                signature=sig_line.decode("utf-8", "replace"),
-                file=path,
-                range=_node_range(lhs),
-            )
+            for a in chain:
+                symbols[a.name] = TopLevelSymbol(
+                    name=a.name,
+                    kind=kind,
+                    signature=sig_line.decode("utf-8", "replace"),
+                    file=path,
+                    range=_node_range(a.target),
+                )
     return symbols
 
 
@@ -235,7 +274,7 @@ class DocumentIndexer:
         self.package = package
         self.top_level = top_level
         self.document = scip.Document(relative_path=relative_path, language="R")
-        self.external_refs: dict[tuple[str, str], ExternalRef] = {}
+        self.external_refs: dict[str, ExternalRef] = {}
         self.symbols_emitted: set[str] = set()
         self.guessed_positions: list[GuessedPosition] = []
         self._counter = LocalCounter()
@@ -271,7 +310,7 @@ class DocumentIndexer:
             )
 
     def note_external(self, ref: ExternalRef) -> None:
-        self.external_refs.setdefault((ref.package, ref.name), ref)
+        self.external_refs.setdefault(ref.symbol, ref)
 
     def index(self, root: Node) -> None:
         """Walk every top-level statement of a parsed file."""
@@ -286,16 +325,30 @@ class DocumentIndexer:
             return
 
         if t == "binary_operator":
-            parts = _assignment_parts(node)
+            parts = _assignment_parts(self.src, node)
             if parts is not None:
-                lhs, rhs = parts
-                self._handle_assignment(lhs, scope)
-                self.walk(rhs, scope)
+                self._handle_assignment(parts, scope)
+                self.walk(parts.value, scope)
                 return
             # fall through to generic recursion for non-assignment binary ops
 
         if t == "call":
             self._walk_call(node, scope)
+            return
+
+        if t == "argument":
+            # ``f(name = value)``: the ``name`` is a formal-argument label,
+            # not a variable read, so only the value is walked.
+            value = node.child_by_field_name("value")
+            if value is not None:
+                self.walk(value, scope)
+            return
+
+        if t == "namespace_operator":
+            # ``pkg::name`` used as a value rather than called, e.g.
+            # ``sapply(x, stats::median)``. Recorded as a non-call external
+            # reference (``name.`` descriptor).
+            self._handle_namespace_ref(node, is_call=False)
             return
 
         if t == "for_statement":
@@ -329,17 +382,27 @@ class DocumentIndexer:
         if body is not None:
             self.walk(body, inner)
 
-    def _handle_assignment(self, lhs: Node, scope: Scope | None) -> None:
-        name = self.text(lhs)
+    def _handle_assignment(self, a: Assignment, scope: Scope | None) -> None:
         if scope is None:
-            if name in self.top_level:
-                self.emit_top_level_definition(self.top_level[name], lhs)
+            if a.name in self.top_level:
+                self.emit_top_level_definition(self.top_level[a.name], a.target)
             return
-        existing = scope.get(name)
+        existing = scope.get(a.name)
         if existing is None:
-            self.emit_occurrence(lhs, scope.define(name), scip.SymbolRole.Definition)
+            self.emit_occurrence(a.target, scope.define(a.name), scip.SymbolRole.Definition)
         else:
-            self.emit_occurrence(lhs, existing, 0)
+            self.emit_occurrence(a.target, existing, 0)
+
+    def _handle_namespace_ref(self, node: Node, *, is_call: bool) -> None:
+        pkg_node = node.child_by_field_name("lhs")
+        name_node = node.child_by_field_name("rhs")
+        if pkg_node is None or name_node is None:
+            return
+        ref = ExternalRef(
+            self.text(pkg_node), self.text(name_node), is_call=is_call, guessed=False
+        )
+        self.note_external(ref)
+        self.emit_occurrence(name_node, ref.symbol)
 
     def _walk_call(self, node: Node, scope: Scope | None) -> None:
         fn = node.child_by_field_name("function")
@@ -348,14 +411,7 @@ class DocumentIndexer:
             if fn.type == "identifier":
                 self.handle_name_use(fn, scope, is_call=True)
             elif fn.type == "namespace_operator":
-                pkg_node = fn.child_by_field_name("lhs")
-                fn_node = fn.child_by_field_name("rhs")
-                if pkg_node is not None and fn_node is not None:
-                    ref = ExternalRef(
-                        self.text(pkg_node), self.text(fn_node), is_call=True, guessed=False
-                    )
-                    self.note_external(ref)
-                    self.emit_occurrence(fn_node, ref.symbol)
+                self._handle_namespace_ref(fn, is_call=True)
             else:
                 self.walk(fn, scope)
         if args is not None:
@@ -453,7 +509,7 @@ def build_index(
     index.metadata.project_root = pkg_dir.resolve().as_uri()
     index.metadata.text_document_encoding = scip.TextEncoding.UTF8
 
-    all_external: dict[tuple[str, str], ExternalRef] = {}
+    all_external: dict[str, ExternalRef] = {}
 
     for path in files:
         rel = path.relative_to(pkg_dir).as_posix()
@@ -466,13 +522,19 @@ def build_index(
         if positions_out is not None:
             positions_out.extend(di.guessed_positions)
 
-    for (pkg, name), ref in sorted(all_external.items()):
+    for _symbol, ref in sorted(all_external.items()):
         info = index.external_symbols.add()
         info.symbol = ref.symbol
-        doc = f"{pkg}::{name}"
+        doc = f"{ref.package}::{ref.name}"
         if ref.guessed:
             doc += f"  {GUESSED_NOTE}"
         info.documentation.append(doc)
-        info.kind = scip.SymbolInformation.Kind.Function
+        # A called name is a function. A ``pkg::name`` used as a value is
+        # usually a function too, but source alone can't say.
+        info.kind = (
+            scip.SymbolInformation.Kind.Function
+            if ref.is_call
+            else scip.SymbolInformation.Kind.UnspecifiedKind
+        )
 
     return index

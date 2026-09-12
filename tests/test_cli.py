@@ -49,7 +49,7 @@ def test_index_stats_and_positions(testpkg_dir: Path, tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert f"{pos}: 2 guessed positions" in result.output
-    assert f"{out}: 2 documents, 3 defined symbols, 45 occurrences" in result.output
+    assert f"{out}: 2 documents, 3 defined symbols, 42 occurrences" in result.output
     assert json.loads(pos.read_text()) == [
         {"file": "R/stats_helpers.R", "line": 2, "character": 8},
         {"file": "R/stats_helpers.R", "line": 8, "character": 33},
@@ -71,7 +71,7 @@ def test_index_file_instead_of_dir_fails(testpkg_dir: Path) -> None:
 def test_stats_text(testpkg_index_file: Path) -> None:
     result = runner.invoke(app, ["stats", str(testpkg_index_file)])
     assert result.exit_code == 0, result.output
-    assert "2 documents, 3 defined symbols, 45 occurrences" in result.output
+    assert "2 documents, 3 defined symbols, 42 occurrences" in result.output
     assert "external packages: base (2), stats (2)" in result.output
     assert "R/pipeline.R: 1 symbols, 11 occurrences (4 definitions)" in result.output
 
@@ -138,10 +138,10 @@ def test_export_duckdb_explicit_output(testpkg_index_file: Path, tmp_path: Path)
     db = tmp_path / "idx.duckdb"
     result = runner.invoke(app, ["export", str(testpkg_index_file), "-f", "duckdb", "-o", str(db)])
     assert result.exit_code == 0, result.output
-    assert "occurrences: 45 rows" in result.output
+    assert "occurrences: 42 rows" in result.output
     con = duckdb.connect(str(db), read_only=True)
     try:
-        assert con.execute("select count(*) from occurrences").fetchone() == (45,)
+        assert con.execute("select count(*) from occurrences").fetchone() == (42,)
     finally:
         con.close()
     # second run without --overwrite fails; with it succeeds
@@ -174,3 +174,22 @@ def test_export_missing_extra_gives_clear_error(
     )
     assert result.exit_code == 3
     assert "scip-r[export]" in result.output
+
+
+def test_index_creates_missing_output_dirs(testpkg_dir: Path, tmp_path: Path) -> None:
+    out = tmp_path / "deep" / "er" / "index.scip"
+    pos = tmp_path / "other" / "positions.json"
+    result = runner.invoke(
+        app, ["index", str(testpkg_dir), "-o", str(out), "--emit-positions", str(pos)]
+    )
+    assert result.exit_code == 0, result.output
+    assert out.is_file() and pos.is_file()
+
+
+@pytest.mark.export
+def test_export_creates_missing_output_dirs(testpkg_index_file: Path, tmp_path: Path) -> None:
+    pytest.importorskip("duckdb")
+    db = tmp_path / "nested" / "dir" / "idx.duckdb"
+    result = runner.invoke(app, ["export", str(testpkg_index_file), "-f", "duckdb", "-o", str(db)])
+    assert result.exit_code == 0, result.output
+    assert db.is_file()

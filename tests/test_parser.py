@@ -313,3 +313,106 @@ def test_empty_package(make_package: MakePackage) -> None:
     idx = build_index(root)
     assert list(idx.documents) == []
     assert list(idx.external_symbols) == []
+
+
+# --- regressions from review -------------------------------------------------
+
+
+def test_named_argument_keys_are_not_reads(make_package: MakePackage) -> None:
+    root = make_package({"R/a.R": "f <- function(x, na.rm) mean(x, na.rm = na.rm)\n"})
+    idx = build_index(root)
+    occ = occurrences(idx, "R/a.R")
+    # `na.rm =` (cols 32-37) is a label; only the value `na.rm` (cols 40-45) is a read
+    assert ([0, 40, 45], "local 1", 0) in occ
+    assert not any(rng == [0, 32, 37] for rng, _, _ in occ)
+    assert sum(1 for _, sym, _ in occ if sym == "local 1") == 2  # def + one read
+
+
+def test_named_argument_key_matching_top_level_symbol(make_package: MakePackage) -> None:
+    root = make_package({"R/a.R": "data <- 1\nf <- function() g(data = 2)\n"})
+    idx = build_index(root)
+    occ = symbols_at(idx, "R/a.R")
+    assert occ["scip-r cran pkg 1.0.0 data."] == [[0, 0, 4]]  # definition only
+
+
+def test_namespace_reference_without_call(make_package: MakePackage) -> None:
+    root = make_package({"R/a.R": "f <- function(x) sapply(x, stats::median)\ng <- utils::head\n"})
+    idx = build_index(root)
+    occ = symbols_at(idx, "R/a.R")
+    assert occ["scip-r cran stats . median."] == [[0, 34, 40]]
+    assert occ["scip-r cran utils . head."] == [[1, 12, 16]]
+    ext = {s.symbol: s for s in idx.external_symbols}
+    assert ext["scip-r cran stats . median."].kind == scip.SymbolInformation.Kind.UnspecifiedKind
+    assert ext["scip-r cran stats . median."].documentation == ["stats::median"]
+
+
+def test_namespace_call_and_value_forms_are_distinct_symbols(make_package: MakePackage) -> None:
+    root = make_package({"R/a.R": "f <- function(x) { stats::sd(x); stats::sd }\n"})
+    idx = build_index(root)
+    assert [s.symbol for s in idx.external_symbols] == [
+        "scip-r cran stats . sd().",
+        "scip-r cran stats . sd.",
+    ]
+
+
+def test_chained_top_level_assignment_defines_every_name(make_package: MakePackage) -> None:
+    root = make_package({"R/a.R": "a <- b <- function() 1\nc <- d <- 2\n"})
+    idx = build_index(root)
+    infos = {s.symbol: s.kind for s in idx.documents[0].symbols}
+    assert infos == {
+        "scip-r cran pkg 1.0.0 a().": scip.SymbolInformation.Kind.Function,
+        "scip-r cran pkg 1.0.0 b().": scip.SymbolInformation.Kind.Function,
+        "scip-r cran pkg 1.0.0 c.": scip.SymbolInformation.Kind.Variable,
+        "scip-r cran pkg 1.0.0 d.": scip.SymbolInformation.Kind.Variable,
+    }
+    occ = symbols_at(idx, "R/a.R")
+    assert occ["scip-r cran pkg 1.0.0 b()."] == [[0, 5, 6]]
+    assert occ["scip-r cran pkg 1.0.0 d."] == [[1, 5, 6]]
+
+
+def test_chained_assignment_inside_function(make_package: MakePackage) -> None:
+    root = make_package({"R/a.R": "f <- function() { a <- b <- 1; a + b }\n"})
+    idx = build_index(root)
+    occ = occurrences(idx, "R/a.R")
+    assert ([0, 18, 19], "local 0", DEF) in occ
+    assert ([0, 23, 24], "local 1", DEF) in occ
+    assert ([0, 35, 36], "local 1", 0) in occ
+
+
+def test_right_assignment(make_package: MakePackage) -> None:
+    root = make_package(
+        {"R/a.R": "1 -> LIMIT\n(function(x) x) ->> g\nf <- function() { 2 -> y; y }\n"}
+    )
+    idx = build_index(root)
+    occ = symbols_at(idx, "R/a.R")
+    assert occ["scip-r cran pkg 1.0.0 LIMIT."] == [[0, 5, 10]]
+    assert occ["scip-r cran pkg 1.0.0 g."] == [[1, 20, 21]]  # rhs is a paren expr, so "value"
+    assert occ["local 0"] == [[1, 10, 11], [1, 13, 14]]  # the lambda's x
+    assert occ["local 1"] == [[2, 23, 24], [2, 26, 27]]  # y inside f
+
+
+def test_string_literal_lhs_defines_operator_and_replacement_functions(
+    make_package: MakePackage,
+) -> None:
+    root = make_package(
+        {"R/a.R": "\"%+%\" <- function(a, b) paste(a, b)\n'foo<-' <- function(x, value) x\n"}
+    )
+    idx = build_index(root)
+    infos = {s.symbol: s.kind for s in idx.documents[0].symbols}
+    assert infos == {
+        "scip-r cran pkg 1.0.0 %+%().": scip.SymbolInformation.Kind.Function,
+        "scip-r cran pkg 1.0.0 foo<-().": scip.SymbolInformation.Kind.Function,
+    }
+    occ = symbols_at(idx, "R/a.R")
+    assert occ["scip-r cran pkg 1.0.0 %+%()."] == [[0, 0, 5]]  # whole string literal incl. quotes
+
+
+def test_destructuring_targets_are_walked_not_defined(make_package: MakePackage) -> None:
+    root = make_package({"R/a.R": "f <- function(x, i) { x[i] <- 1; names(x) <- 'a'; x }\n"})
+    idx = build_index(root)
+    occ = occurrences(idx, "R/a.R")
+    # x and i are read inside the targets; no new locals are created
+    assert ([0, 22, 23], "local 0", 0) in occ
+    assert ([0, 24, 25], "local 1", 0) in occ
+    assert not any(sym == "local 2" for _, sym, _ in occ)
+    assert [s.symbol for s in idx.external_symbols] == ["scip-r cran base . names()."]

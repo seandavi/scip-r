@@ -40,6 +40,24 @@ uses [Semantic Versioning](https://semver.org/).
   languageserver composite action moved from `.github-action/` to
   `actions/ls-resolve/`.
 
+### Fixed
+
+- Named-argument labels (`f(na.rm = na.rm)`) were indexed as variable
+  reads of `na.rm`, producing a spurious reference occurrence at the label
+  position whenever the label matched an in-scope name. Only the value is
+  walked now. The fixture golden index was regenerated (45 to 42
+  occurrences).
+- `pkg::name` used as a value rather than called (`sapply(x, stats::median)`)
+  was silently dropped; it is now a non-call external reference with a
+  `name.` descriptor and `UnspecifiedKind`.
+- Chained top-level assignment (`a <- b <- 1`) lost the inner name; every
+  name in the chain is now defined.
+- Right assignment (`1 -> x`, `->>`) and string-literal targets
+  (`"%+%" <- function(a, b) ...`, `"foo<-" <- function(x, value) ...`) are
+  now recognised as definitions.
+- `index -o`, `--emit-positions` and `export -o` create missing parent
+  directories instead of failing with a traceback.
+
 ### Removed
 
 - The prebuilt Linux `tree-sitter-r` wheel is no longer tracked in the

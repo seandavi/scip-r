@@ -21,6 +21,7 @@ def load_index(path: Path | str) -> scip.Index:
 def write_index(index: scip.Index, path: Path | str) -> Path:
     """Serialise ``index`` to ``path`` and return the path written."""
     out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(index.SerializeToString())
     return out
 
