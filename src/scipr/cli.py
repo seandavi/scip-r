@@ -2,26 +2,29 @@
 
 Subcommands::
 
-    scip-r index PKG_DIR [-o index.scip] [--stats] [--emit-positions FILE]
+    scip-r index PKG_DIR|TARBALL [-o index.scip] [--stats] [--emit-positions FILE]
     scip-r stats INDEX [--json]
     scip-r print INDEX [--json] [--no-locals]
     scip-r export INDEX --format parquet|duckdb [-o PATH] [--overwrite]
-    scip-r resolve INDEX --pkg DIR [-o OUT] [--meta FILE] [--rscript PATH]
+    scip-r resolve INDEX (--pkg DIR | --installed NAME) [-o OUT] [--meta FILE]
+    scip-r batch SOURCES... [--manifest FILE] -o OUTDIR [--jobs N] [--resolve] [--export ...]
 """
 
 from __future__ import annotations
 
 import json
 import sys
+import tempfile
 from enum import Enum
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
 from . import __version__
 from .inspect import load_index, render_text, summarize, write_index
-from .parser import GuessedPosition, build_index
+from .package import is_tarball, sha256_file, unpack_tarball
+from .parser import GuessedPosition, build_index, index_arguments
 
 app = typer.Typer(
     name="scip-r",
@@ -82,10 +85,12 @@ def index(
         Path,
         typer.Argument(
             exists=True,
-            file_okay=False,
             readable=True,
             show_default=False,
-            help="R package root (has DESCRIPTION and R/). Only files under R/ are indexed.",
+            help=(
+                "R package root (has DESCRIPTION and R/) or a source tarball "
+                "(.tar.gz). Only files under R/ are indexed."
+            ),
         ),
     ],
     output: Annotated[
@@ -107,11 +112,39 @@ def index(
             ),
         ),
     ] = None,
+    manager: Annotated[
+        str | None,
+        typer.Option(
+            "--manager",
+            show_default=False,
+            help=(
+                "Package manager for this package's symbols (cran, bioconductor, r, ...). "
+                "Default: inferred from DESCRIPTION (biocViews => bioconductor)."
+            ),
+        ),
+    ] = None,
 ) -> None:
-    """Index an R package's source tree into a SCIP index file."""
+    """Index an R package's source tree (or tarball) into a SCIP index file."""
     positions: list[GuessedPosition] | None = [] if emit_positions else None
     try:
-        idx = build_index(pkg_dir, positions_out=positions)
+        if is_tarball(pkg_dir):
+            with tempfile.TemporaryDirectory(prefix="scipr-index-") as tmp:
+                root = unpack_tarball(pkg_dir, tmp)
+                idx = build_index(
+                    root,
+                    positions_out=positions,
+                    manager=manager,
+                    extra_arguments={
+                        "source_tarball": pkg_dir.name,
+                        "source_sha256": sha256_file(pkg_dir),
+                    },
+                )
+                idx.metadata.project_root = pkg_dir.resolve().as_uri()
+        elif not pkg_dir.is_dir():
+            _err(f"{pkg_dir} is neither a directory nor a .tar.gz/.tgz tarball")
+            raise typer.Exit(code=2)
+        else:
+            idx = build_index(pkg_dir, positions_out=positions, manager=manager)
     except NotADirectoryError as e:
         _err(str(e))
         raise typer.Exit(code=2) from e
@@ -199,6 +232,16 @@ def export(
         bool,
         typer.Option("--overwrite", help="Replace existing DuckDB tables with the same names."),
     ] = False,
+    hive: Annotated[
+        bool,
+        typer.Option(
+            "--hive",
+            help=(
+                "Parquet only: write <table>/index_package=X/index_version=Y/ partitions "
+                "so many packages can share one directory."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Convert an index into Parquet files or a DuckDB database.
 
@@ -211,7 +254,7 @@ def export(
     try:
         if fmt is ExportFormat.parquet:
             out_dir = output or index_file.parent / f"{stem}-parquet"
-            written = write_parquet(idx, out_dir)
+            written = write_parquet(idx, out_dir, hive=hive)
             for name, path in written.items():
                 typer.echo(f"{name}: {path}", err=True)
         else:
@@ -228,16 +271,28 @@ def export(
 def resolve(
     index_file: IndexArg,
     pkg_dir: Annotated[
-        Path,
+        Path | None,
         typer.Option(
             "--pkg",
             exists=True,
             file_okay=False,
             readable=True,
             show_default=False,
-            help="The package source directory the index was built from.",
+            help="The package source directory the index was built from (loaded with pkgload).",
         ),
-    ],
+    ] = None,
+    installed: Annotated[
+        str | None,
+        typer.Option(
+            "--installed",
+            metavar="NAME",
+            show_default=False,
+            help=(
+                "Resolve against an already-installed package (loadNamespace) instead of "
+                "a source checkout. Cheaper on a build machine; no toolchain needed."
+            ),
+        ),
+    ] = None,
     output: Annotated[
         Path | None,
         typer.Option(
@@ -289,11 +344,14 @@ def resolve(
         resolve_index,
     )
 
+    if (pkg_dir is None) == (installed is None):
+        _err("give exactly one of --pkg DIR or --installed NAME")
+        raise typer.Exit(code=2)
     idx = load_index(index_file)
     out = output or index_file.with_name(f"{index_file.with_suffix('').name}.resolved.scip")
     meta_path = meta or out.with_name(out.name + ".meta.json")
     try:
-        result = resolve_index(idx, pkg_dir, rscript=rscript, timeout=timeout)
+        result = resolve_index(idx, pkg_dir, installed=installed, rscript=rscript, timeout=timeout)
     except RscriptNotFoundError as e:
         _err(str(e))
         raise typer.Exit(code=4) from e
@@ -307,7 +365,13 @@ def resolve(
     payload = result.index.SerializeToString()
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(payload)
-    record = metadata_record(result.resolution, result.stats, index_path=out, index_bytes=payload)
+    record = metadata_record(
+        result.resolution,
+        result.stats,
+        index_path=out,
+        index_bytes=payload,
+        source=index_arguments(result.index),
+    )
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     meta_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     if keep_json is not None:
@@ -326,6 +390,103 @@ def resolve(
         )
         for u in s.unmatched_methods:
             typer.echo(f"  note: no static symbol matched {u}", err=True)
+
+
+class BatchExport(str, Enum):
+    parquet = "parquet"
+    duckdb = "duckdb"
+
+
+@app.command()
+def batch(
+    sources: Annotated[
+        list[Path] | None,
+        typer.Argument(
+            exists=True,
+            show_default=False,
+            help=(
+                "Package directories, tarballs, or directories containing many of either. "
+                "May be combined with --manifest."
+            ),
+        ),
+    ] = None,
+    manifest: Annotated[
+        Path | None,
+        typer.Option(
+            "--manifest",
+            exists=True,
+            dir_okay=False,
+            show_default=False,
+            help="Text file listing one package directory or tarball per line.",
+        ),
+    ] = None,
+    out_dir: Annotated[
+        Path, typer.Option("-o", "--output", help="Root directory for per-package outputs.")
+    ] = Path("scip-r-out"),
+    jobs: Annotated[int, typer.Option("--jobs", "-j", help="Parallel workers.")] = 1,
+    resolve_: Annotated[
+        bool, typer.Option("--resolve", help="Also run scip-r resolve (needs R).")
+    ] = False,
+    export_: Annotated[
+        BatchExport | None,
+        typer.Option("--export", show_default=False, help="Also export each index."),
+    ] = None,
+    hive: Annotated[
+        bool,
+        typer.Option(
+            "--hive",
+            help="With --export parquet: one hive-partitioned dataset under <out>/parquet/.",
+        ),
+    ] = False,
+    manager: Annotated[
+        str | None, typer.Option("--manager", show_default=False, help="Override the manager.")
+    ] = None,
+    rscript: Annotated[
+        Path | None, typer.Option("--rscript", show_default=False, help="Rscript executable.")
+    ] = None,
+    timeout: Annotated[
+        float, typer.Option("--timeout", help="Seconds to allow each R session.")
+    ] = 600.0,
+) -> None:
+    """Index many packages; continue past failures; write summary.jsonl.
+
+    Each package lands in <out>/<package>/ with index.scip and, when asked,
+    index.resolved.scip, its metadata record, and an export.
+    """
+    from .batch import BatchOptions, discover_sources, run_batch
+
+    found = discover_sources(list(sources or []), manifest)
+    if not found:
+        _err("no packages found (give directories, tarballs, or --manifest)")
+        raise typer.Exit(code=2)
+    opts = BatchOptions(
+        resolve=resolve_,
+        export=export_.value if export_ else None,
+        hive=hive,
+        manager=manager,
+        rscript=str(rscript) if rscript else None,
+        timeout=timeout,
+    )
+
+    def report(r: Any) -> None:
+        if r.status == "ok":
+            s = r.summary or {}
+            typer.echo(
+                f"ok    {r.package} {r.version}: {s.get('documents')} documents, "
+                f"{s.get('symbols')} symbols, {s.get('occurrences')} occurrences",
+                err=True,
+            )
+        else:
+            first = (r.error or "").splitlines()[0]
+            typer.echo(f"error {r.source}: {first}", err=True)
+
+    results = run_batch(found, out_dir, opts, jobs=jobs, on_result=report)
+    failed = sum(1 for r in results if r.status != "ok")
+    typer.echo(
+        f"{out_dir / 'summary.jsonl'}: {len(results) - failed} ok, {failed} failed", err=True
+    )
+    if failed:
+        raise typer.Exit(code=1)
 
 
 def main() -> None:

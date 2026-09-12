@@ -55,7 +55,12 @@ jobs:
           uv run --no-sync scip-r stats index.scip
           uv run --no-sync scip-r print index.scip --no-locals
           uv run --no-sync scip-r export index.scip --format parquet -o out-parquet
+          uv run --no-sync scip-r export index.scip --format parquet --hive -o out-hive
           uv run --no-sync scip-r export index.scip --format duckdb -o index.duckdb
+          tar czf testpkg.tar.gz -C tests/fixtures testpkg
+          uv run --no-sync scip-r index testpkg.tar.gz -o tarball.scip --stats
+          uv run --no-sync scip-r batch tests/fixtures/testpkg testpkg.tar.gz -o batch-out --jobs 2 --export parquet --hive
+          test "$(grep -c '' batch-out/summary.jsonl)" -eq 2
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
         uses: actions/upload-artifact@v4
@@ -95,7 +100,12 @@ jobs:
           uv run --no-sync scip-r print index.resolved.scip --no-locals
           test "$(uv run --no-sync scip-r stats index.resolved.scip --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["guessed_external_symbols"])')" = "0"
           uv run --no-sync scip-r export index.resolved.scip --format duckdb -o index.duckdb
-          python3 -c "import json; r = json.load(open('index.resolved.scip.meta.json')); print(r['run_id'], r['environment']['r_version'])"
+          python3 -c "import json; r = json.load(open('index.resolved.scip.meta.json')); print(r['run_id'], r['environment']['r_version'], r['source'])"
+      - name: Resolve against an installed package (jsonlite) and batch with --resolve
+        run: |
+          uv run --no-sync scip-r resolve index.scip --installed jsonlite -o installed.scip --stats
+          uv run --no-sync scip-r batch tests/fixtures/testpkg -o batch-r --resolve --export parquet --hive
+          test "$(grep -c '' batch-r/summary.jsonl)" -eq 1 && grep -q '"status": "ok"' batch-r/summary.jsonl
 
   build:
     name: Build sdist and wheel

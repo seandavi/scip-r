@@ -7,10 +7,13 @@ import pytest
 from scipr import build_index
 from scipr import scip_pb2 as scip
 from scipr.parser import (
+    EXPORTED_DOC,
     GUESSED_NOTE,
-    PackageInfo,
+    IMPORTED_NOTE,
+    S3_GENERIC_NOTE,
     collect_top_level_symbols,
     find_r_files,
+    index_arguments,
     read_description,
 )
 from tests.conftest import MakePackage, occurrences, symbols_at
@@ -23,17 +26,20 @@ DEF = scip.SymbolRole.Definition
 
 def test_read_description(make_package: MakePackage) -> None:
     root = make_package({}, name="mypkg", version="2.3.4")
-    assert read_description(root) == PackageInfo("mypkg", "2.3.4")
+    info = read_description(root)
+    assert (info.name, info.version, info.manager) == ("mypkg", "2.3.4", "cran")
 
 
 def test_read_description_missing_file_falls_back_to_dirname(make_package: MakePackage) -> None:
     root = make_package({}, name="loose", description=False)
-    assert read_description(root) == PackageInfo("loose", "0.0.0")
+    info = read_description(root)
+    assert (info.name, info.version) == ("loose", "0.0.0")
 
 
 def test_read_description_missing_fields(make_package: MakePackage) -> None:
     root = make_package({}, name="onlyname", version=None)
-    assert read_description(root) == PackageInfo("onlyname", "0.0.0")
+    info = read_description(root)
+    assert (info.name, info.version) == ("onlyname", "0.0.0")
 
 
 def test_find_r_files_only_under_R_dir_recursively_and_sorted(make_package: MakePackage) -> None:
@@ -139,7 +145,7 @@ def test_definition_role_and_symbol_information(testpkg_index: scip.Index) -> No
     }
     z = infos["scip-r cran testpkg 0.1.0 zscore()."]
     assert z.kind == scip.SymbolInformation.Kind.Function
-    assert z.documentation == ["zscore <- function(x, na.rm = TRUE) {"]
+    assert z.documentation == ["zscore <- function(x, na.rm = TRUE) {", EXPORTED_DOC]
     defs = [
         o for o in doc.occurrences if o.symbol_roles & DEF and not o.symbol.startswith("local")
     ]
@@ -151,25 +157,29 @@ def test_definition_role_and_symbol_information(testpkg_index: scip.Index) -> No
 
 def test_namespaced_calls_become_external_refs(testpkg_index: scip.Index) -> None:
     occ = symbols_at(testpkg_index, "R/stats_helpers.R")
-    assert occ["scip-r cran stats . quantile()."] == [[9, 15, 23]]
+    assert occ["scip-r . stats . quantile()."] == [[9, 15, 23]]
 
 
 def test_unresolved_calls_are_guessed_as_base(testpkg_index: scip.Index) -> None:
     occ = symbols_at(testpkg_index, "R/stats_helpers.R")
-    assert occ["scip-r cran base . mean()."] == [[2, 8, 12]]
-    assert occ["scip-r cran base . c()."] == [[8, 33, 34]]
+    assert occ["scip-r . base . mean()."] == [[2, 8, 12]]
+    assert occ["scip-r . stats . sd()."] == [[3, 7, 9]]  # importFrom(stats, sd) in NAMESPACE
+    assert occ["scip-r . base . c()."] == [[8, 33, 34]]
 
 
 def test_external_symbols_sorted_and_documented(testpkg_index: scip.Index) -> None:
     ext = {s.symbol: s for s in testpkg_index.external_symbols}
     assert list(ext) == sorted(ext)
     assert {
-        "scip-r cran base . mean().",
-        "scip-r cran base . sd().",
-        "scip-r cran stats . quantile().",
+        "scip-r . base . mean().",
+        "scip-r . stats . sd().",
+        "scip-r . stats . quantile().",
+        "scip-r . base . print().",
     } <= set(ext)
-    assert ext["scip-r cran base . mean()."].documentation == [f"base::mean  {GUESSED_NOTE}"]
-    assert ext["scip-r cran stats . quantile()."].documentation == ["stats::quantile"]
+    assert ext["scip-r . base . mean()."].documentation == [f"base::mean  {GUESSED_NOTE}"]
+    assert ext["scip-r . stats . quantile()."].documentation == ["stats::quantile"]
+    assert ext["scip-r . stats . sd()."].documentation == [f"stats::sd  {IMPORTED_NOTE}"]
+    assert ext["scip-r . base . print()."].documentation == [f"base::print  {S3_GENERIC_NOTE}"]
     assert all(s.kind == scip.SymbolInformation.Kind.Function for s in ext.values())
 
 
@@ -198,41 +208,24 @@ def test_local_ids_are_unique_per_document(testpkg_index: scip.Index) -> None:
 def test_guessed_positions(testpkg_dir: Path) -> None:
     positions: list = []
     build_index(testpkg_dir, positions_out=positions)
-    sh = [p for p in positions if p["file"] == "R/stats_helpers.R"]
+    sh = [
+        (p["line"], p["character"], p["name"], p["enclosing"])
+        for p in positions
+        if p["file"] == "R/stats_helpers.R"
+    ]
     assert sh == [
-        {
-            "file": "R/stats_helpers.R",
-            "line": 2,
-            "character": 8,
-            "name": "mean",
-            "enclosing": "zscore",
-        },
-        {
-            "file": "R/stats_helpers.R",
-            "line": 3,
-            "character": 7,
-            "name": "sd",
-            "enclosing": "zscore",
-        },
-        {
-            "file": "R/stats_helpers.R",
-            "line": 4,
-            "character": 2,
-            "name": "structure",
-            "enclosing": "zscore",
-        },
-        {
-            "file": "R/stats_helpers.R",
-            "line": 8,
-            "character": 33,
-            "name": "c",
-            "enclosing": "winsorize",
-        },
+        (2, 8, "mean", "zscore"),
+        (4, 2, "structure", "zscore"),
+        (8, 33, "c", "winsorize"),
     ]
     top = {p["name"] for p in positions if p["file"] == "R/classes.R" and p["enclosing"] is None}
-    assert {"setClass", "representation", "setGeneric", "setMethod", "R6Class"} <= top
+    assert {"representation", "standardGeneric", "list"} <= top  # setClass etc. are imports
     assert "cat" not in top  # inside print.zresult, so enclosing is set
     assert {p["enclosing"] for p in positions if p["name"] == "cat"} == {"print.zresult"}
+    assert {p["enclosing"] for p in positions if p["name"] == "invisible"} == {
+        "print.zresult",
+        "Counter$add",
+    }
 
 
 # --- targeted syntax cases ---------------------------------------------------
@@ -299,7 +292,7 @@ def test_for_loop_variable_is_local(make_package: MakePackage) -> None:
     assert ([1, 30, 31], "local 1", 0) in occ  # print(i)
     assert ([1, 20, 21], "local 0", 0) in occ  # seq_len(n)
     ext = sorted(s.symbol for s in idx.external_symbols)
-    assert ext == ["scip-r cran base . print().", "scip-r cran base . seq_len()."]
+    assert ext == ["scip-r . base . print().", "scip-r . base . seq_len()."]
 
 
 def test_parameter_defaults_see_earlier_parameters(make_package: MakePackage) -> None:
@@ -324,10 +317,10 @@ def test_triple_colon_and_method_call_targets(make_package: MakePackage) -> None
     root = make_package({"R/a.R": "f <- function(x) {\n  pkg:::hidden(x)\n  x$method(1)\n}\n"})
     idx = build_index(root)
     occ = symbols_at(idx, "R/a.R")
-    assert occ["scip-r cran pkg . hidden()."] == [[1, 8, 14]]
+    assert occ["scip-r . pkg . hidden()."] == [[1, 8, 14]]
     # x$method(1): the callee is an extract expression, so `x` is a local
     # read and nothing is guessed.
-    assert [s.symbol for s in idx.external_symbols] == ["scip-r cran pkg . hidden()."]
+    assert [s.symbol for s in idx.external_symbols] == ["scip-r . pkg . hidden()."]
     assert [2, 2, 3] in occ["local 0"]
 
 
@@ -370,19 +363,19 @@ def test_namespace_reference_without_call(make_package: MakePackage) -> None:
     root = make_package({"R/a.R": "f <- function(x) sapply(x, stats::median)\ng <- utils::head\n"})
     idx = build_index(root)
     occ = symbols_at(idx, "R/a.R")
-    assert occ["scip-r cran stats . median."] == [[0, 34, 40]]
-    assert occ["scip-r cran utils . head."] == [[1, 12, 16]]
+    assert occ["scip-r . stats . median."] == [[0, 34, 40]]
+    assert occ["scip-r . utils . head."] == [[1, 12, 16]]
     ext = {s.symbol: s for s in idx.external_symbols}
-    assert ext["scip-r cran stats . median."].kind == scip.SymbolInformation.Kind.UnspecifiedKind
-    assert ext["scip-r cran stats . median."].documentation == ["stats::median"]
+    assert ext["scip-r . stats . median."].kind == scip.SymbolInformation.Kind.UnspecifiedKind
+    assert ext["scip-r . stats . median."].documentation == ["stats::median"]
 
 
 def test_namespace_call_and_value_forms_are_distinct_symbols(make_package: MakePackage) -> None:
     root = make_package({"R/a.R": "f <- function(x) { stats::sd(x); stats::sd }\n"})
     idx = build_index(root)
     assert [s.symbol for s in idx.external_symbols] == [
-        "scip-r cran stats . sd().",
-        "scip-r cran stats . sd.",
+        "scip-r . stats . sd().",
+        "scip-r . stats . sd.",
     ]
 
 
@@ -446,7 +439,7 @@ def test_destructuring_targets_are_walked_not_defined(make_package: MakePackage)
     assert ([0, 22, 23], "local 0", 0) in occ
     assert ([0, 24, 25], "local 1", 0) in occ
     assert not any(sym == "local 2" for _, sym, _ in occ)
-    assert [s.symbol for s in idx.external_symbols] == ["scip-r cran base . names()."]
+    assert [s.symbol for s in idx.external_symbols] == ["scip-r . base . names()."]
 
 
 # --- S4 / R6 definitions ------------------------------------------------------
@@ -510,7 +503,7 @@ def test_setmethod_signature_forms(make_package: MakePackage) -> None:
     assert syms == [
         "scip-r cran pkg 1.0.0 combine(A,B).",
         "scip-r cran pkg 1.0.0 length(Foo).",
-        "scip-r cran pkg 1.0.0 merge(A,ANY).",
+        "scip-r cran pkg 1.0.0 merge(A).",  # trailing ANY dropped
         "scip-r cran pkg 1.0.0 show(Foo).",
     ]
     # external generic: no static relationship (scip-r resolve adds it)
@@ -555,3 +548,247 @@ def test_enclosing_function_in_positions(make_package: MakePackage) -> None:
         ("inner", "f"),
         ("deep", "g"),
     ]
+
+
+# --- review-gap features ---------------------------------------------------------
+
+
+def test_documents_declare_utf8_byte_offsets(testpkg_index: scip.Index) -> None:
+    assert all(
+        d.position_encoding == scip.PositionEncoding.UTF8CodeUnitOffsetFromLineStart
+        for d in testpkg_index.documents
+    )
+
+
+def test_columns_are_utf8_bytes(make_package: MakePackage) -> None:
+    root = make_package({"R/a.R": 'f <- function(x) { "café"; g(x) }\n'})
+    idx = build_index(root)
+    occ = symbols_at(idx, "R/a.R")
+    # "café" is 6 bytes with quotes; g sits at byte 28, one past its character column
+    assert occ["scip-r . base . g()."] == [[0, 28, 29]]
+
+
+def test_triple_colon_is_marked_on_the_occurrence(make_package: MakePackage) -> None:
+    root = make_package({"R/a.R": "f <- function() { pkg:::secret(); pkg::open() }\n"})
+    idx = build_index(root)
+    by_name = {o.symbol: o for o in idx.documents[0].occurrences if "pkg" in o.symbol}
+    assert list(by_name["scip-r . pkg . secret()."].override_documentation) == ["pkg:::secret"]
+    assert list(by_name["scip-r . pkg . open()."].override_documentation) == []
+
+
+def test_tool_info_stamps(testpkg_index: scip.Index) -> None:
+    stamps = index_arguments(testpkg_index)
+    assert stamps["package"] == "testpkg" and stamps["version"] == "0.1.0"
+    assert stamps["manager"] == "cran"
+    assert "git_commit" in stamps  # the fixture lives inside this repository
+
+
+def test_manager_inferred_from_biocviews_and_overridable(make_package: MakePackage) -> None:
+    root = make_package({"R/a.R": "f <- function() 1\n"}, name="bpkg")
+    (root / "DESCRIPTION").write_text("Package: bpkg\nVersion: 1.0\nbiocViews: Software\n")
+    idx = build_index(root)
+    assert [s.symbol for s in idx.documents[0].symbols] == ["scip-r bioconductor bpkg 1.0 f()."]
+    assert index_arguments(idx)["manager"] == "bioconductor"
+    idx = build_index(root, manager="github")
+    assert [s.symbol for s in idx.documents[0].symbols] == ["scip-r github bpkg 1.0 f()."]
+
+
+def test_extra_arguments_are_stamped(make_package: MakePackage) -> None:
+    root = make_package({"R/a.R": "f <- function() 1\n"})
+    idx = build_index(root, extra_arguments={"source_sha256": "abc"})
+    assert index_arguments(idx)["source_sha256"] == "abc"
+
+
+def test_exported_flag_from_namespace(testpkg_index: scip.Index) -> None:
+    docs = {s.symbol: list(s.documentation) for d in testpkg_index.documents for s in d.symbols}
+    assert EXPORTED_DOC in docs["scip-r cran testpkg 0.1.0 zscore()."]
+    assert EXPORTED_DOC not in docs["scip-r cran testpkg 0.1.0 print.zresult()."]
+    assert EXPORTED_DOC in docs["scip-r cran testpkg 0.1.0 Interval#"]  # exportClasses
+    assert EXPORTED_DOC in docs["scip-r cran testpkg 0.1.0 width(Interval)."]  # exportMethods
+    assert EXPORTED_DOC not in docs["scip-r cran testpkg 0.1.0 width()."]
+    assert EXPORTED_DOC in docs["scip-r cran testpkg 0.1.0 Counter#"]  # via export(Counter)
+    assert EXPORTED_DOC in docs["scip-r cran testpkg 0.1.0 Counter#add()."]
+
+
+def test_export_pattern(make_package: MakePackage) -> None:
+    root = make_package({"R/a.R": "pub <- function() 1\n.hidden <- function() 2\n"})
+    (root / "NAMESPACE").write_text('exportPattern("^[^\\\\.]")\n')
+    idx = build_index(root)
+    docs = {s.symbol: list(s.documentation) for s in idx.documents[0].symbols}
+    assert EXPORTED_DOC in docs["scip-r cran pkg 1.0.0 pub()."]
+    assert EXPORTED_DOC not in docs["scip-r cran pkg 1.0.0 .hidden()."]
+
+
+def test_no_namespace_means_no_export_marks(make_package: MakePackage) -> None:
+    root = make_package({"R/a.R": "f <- function() 1\n"})
+    idx = build_index(root)
+    assert idx.documents[0].symbols[0].documentation == ["f <- function() 1"]
+
+
+def test_importfrom_resolves_without_r(make_package: MakePackage) -> None:
+    root = make_package({"R/a.R": "f <- function(x) filter(x) + mutate\n"})
+    (root / "NAMESPACE").write_text("importFrom(dplyr, filter, mutate)\n")
+    idx = build_index(root)
+    occ = symbols_at(idx, "R/a.R")
+    assert occ["scip-r . dplyr . filter()."] == [[0, 17, 23]]
+    assert occ["scip-r . dplyr . mutate."] == [[0, 29, 35]]
+    ext = {s.symbol: s.documentation[0] for s in idx.external_symbols}
+    assert ext["scip-r . dplyr . filter()."] == f"dplyr::filter  {IMPORTED_NOTE}"
+    assert not any("guessed" in d for d in ext.values())
+
+
+def test_s3method_links_to_local_and_qualified_generics(make_package: MakePackage) -> None:
+    root = make_package(
+        {
+            "R/a.R": (
+                "area <- function(x, ...) UseMethod('area')\n"
+                "area.square <- function(x, ...) x$s^2\n"
+                "format.square <- function(x, ...) 'sq'\n"
+                "summarise_it <- function(x) NULL\n"
+            )
+        }
+    )
+    (root / "NAMESPACE").write_text(
+        "S3method(area, square)\nS3method(base::format, square)\n"
+        "S3method(dplyr::summarise, square, summarise_it)\n"
+    )
+    idx = build_index(root)
+    rels = {
+        s.symbol: [r.symbol for r in s.relationships if r.is_implementation]
+        for s in idx.documents[0].symbols
+    }
+    assert rels["scip-r cran pkg 1.0.0 area.square()."] == ["scip-r cran pkg 1.0.0 area()."]
+    assert rels["scip-r cran pkg 1.0.0 format.square()."] == ["scip-r . base . format()."]
+    assert rels["scip-r cran pkg 1.0.0 summarise_it()."] == ["scip-r . dplyr . summarise()."]
+    ext = {s.symbol: s.documentation[0] for s in idx.external_symbols}
+    assert ext["scip-r . base . format()."] == "base::format"  # package given, not guessed
+
+
+def test_r6_members_and_self_resolution(testpkg_index: scip.Index) -> None:
+    doc = testpkg_index.documents[0]
+    kinds = {s.symbol: s.kind for s in doc.symbols}
+    K = scip.SymbolInformation.Kind
+    assert kinds["scip-r cran testpkg 0.1.0 Counter#n."] == K.Field
+    assert kinds["scip-r cran testpkg 0.1.0 Counter#add()."] == K.Method
+    occ = symbols_at(testpkg_index, "R/classes.R")
+    assert occ["scip-r cran testpkg 0.1.0 Counter#n."] == [[16, 4, 5], [18, 11, 12], [18, 21, 22]]
+    assert occ["scip-r cran testpkg 0.1.0 Counter#add()."] == [[17, 4, 7]]
+    defs = {o.symbol: list(o.enclosing_range) for o in doc.occurrences if o.symbol_roles & DEF}
+    assert defs["scip-r cran testpkg 0.1.0 Counter#add()."] == [17, 4, 20, 5]
+    assert defs["scip-r cran testpkg 0.1.0 Counter#"] == [14, 0, 22, 1]
+
+
+def test_r6_private_and_active_and_inherit(make_package: MakePackage) -> None:
+    root = make_package(
+        {
+            "R/a.R": (
+                'Base <- R6Class("Base", public = list(hello = function() 1))\n'
+                'Kid <- R6Class("Kid", inherit = Base,\n'
+                "  private = list(secret = 1),\n"
+                "  active = list(twice = function() private$secret * 2),\n"
+                "  public = list(go = function() { private$secret; self$twice; self$nothere })\n"
+                ")\n"
+            )
+        }
+    )
+    idx = build_index(root)
+    doc = idx.documents[0]
+    syms = {s.symbol: s for s in doc.symbols}
+    assert "scip-r cran pkg 1.0.0 Kid#secret." in syms
+    assert "scip-r cran pkg 1.0.0 Kid#twice()." in syms
+    kid = syms["scip-r cran pkg 1.0.0 Kid#"]
+    assert [r.symbol for r in kid.relationships] == ["scip-r cran pkg 1.0.0 Base#"]
+    occ = symbols_at(idx, "R/a.R")
+    assert len(occ["scip-r cran pkg 1.0.0 Kid#secret."]) == 3  # def + 2 reads
+    assert len(occ["scip-r cran pkg 1.0.0 Kid#twice()."]) == 2
+    assert not any("nothere" in s for s in occ)
+
+
+def test_reference_class_methods(make_package: MakePackage) -> None:
+    root = make_package(
+        {
+            "R/a.R": (
+                'Acc <- setRefClass("Account", fields = list(bal = "numeric"),\n'
+                "  methods = list(dep = function(x) { bal <<- bal + x; .self$bal }))\n"
+            )
+        }
+    )
+    idx = build_index(root)
+    syms = {s.symbol: s.kind for s in idx.documents[0].symbols}
+    K = scip.SymbolInformation.Kind
+    assert syms["scip-r cran pkg 1.0.0 Account#bal."] == K.Field
+    assert syms["scip-r cran pkg 1.0.0 Account#dep()."] == K.Method
+    occ = symbols_at(idx, "R/a.R")
+    assert occ["scip-r cran pkg 1.0.0 Account#bal."] == [
+        [0, 44, 47],
+        [1, 60, 63],
+    ]  # def, .self$bal
+
+
+def test_s4_contains_relationship(make_package: MakePackage) -> None:
+    root = make_package(
+        {
+            "R/a.R": (
+                'setClass("Shape", representation("VIRTUAL"))\n'
+                'setClass("Square", contains = "Shape", representation(s = "numeric"))\n'
+                'setClass("Weird", contains = c("Square", "Unknown"))\n'
+            )
+        }
+    )
+    idx = build_index(root)
+    rels = {s.symbol: [r.symbol for r in s.relationships] for s in idx.documents[0].symbols}
+    assert rels["scip-r cran pkg 1.0.0 Square#"] == ["scip-r cran pkg 1.0.0 Shape#"]
+    assert rels["scip-r cran pkg 1.0.0 Weird#"] == ["scip-r cran pkg 1.0.0 Square#"]
+
+
+def test_setmethod_named_arguments(make_package: MakePackage) -> None:
+    root = make_package(
+        {
+            "R/a.R": (
+                'setMethod(f = "show", signature = "Foo", definition = function(object) NULL)\n'
+                'setClass(Class = "Foo")\n'
+                'setGeneric(name = "go", def = function(x) standardGeneric("go"))\n'
+            )
+        }
+    )
+    idx = build_index(root)
+    assert sorted(s.symbol for s in idx.documents[0].symbols) == [
+        "scip-r cran pkg 1.0.0 Foo#",
+        "scip-r cran pkg 1.0.0 go().",
+        "scip-r cran pkg 1.0.0 show(Foo).",
+    ]
+
+
+def test_field_access_is_not_a_read_of_a_top_level_name(make_package: MakePackage) -> None:
+    root = make_package({"R/a.R": "n <- 1\nf <- function(x) { x$n; x@n; x$n$n }\n"})
+    idx = build_index(root)
+    occ = symbols_at(idx, "R/a.R")
+    assert occ["scip-r cran pkg 1.0.0 n."] == [[0, 0, 1]]  # definition only
+    assert len(occ["local 0"]) == 4  # x, x, x, x
+
+
+def test_collate_order_decides_the_winner(make_package: MakePackage) -> None:
+    root = make_package({"R/a.R": "f <- function() 'a'\n", "R/b.R": "f <- function() 'b'\n"})
+    (root / "DESCRIPTION").write_text("Package: pkg\nVersion: 1.0.0\nCollate: 'b.R' 'a.R'\n")
+    idx = build_index(root)
+    assert [d.relative_path for d in idx.documents] == ["R/b.R", "R/a.R"]
+    f = next(s for d in idx.documents for s in d.symbols if s.symbol.endswith(" f()."))
+    assert f.documentation[0] == "f <- function() 'a'"  # a.R is sourced last
+
+
+def test_dotfiles_are_skipped(make_package: MakePackage) -> None:
+    root = make_package(
+        {"R/a.R": "f <- function() 1\n", "R/._a.R": "garbage(\n", "R/.hidden/x.R": "g <- 1\n"}
+    )
+    idx = build_index(root)
+    assert [d.relative_path for d in idx.documents] == ["R/a.R"]
+
+
+def test_enclosing_range_on_top_level_definitions(testpkg_index: scip.Index) -> None:
+    doc = testpkg_index.documents[2]  # stats_helpers.R
+    z = next(
+        o for o in doc.occurrences if o.symbol.endswith(" zscore().") and o.symbol_roles & DEF
+    )
+    assert list(z.enclosing_range) == [1, 0, 5, 1]
+    refs = [o for o in doc.occurrences if not o.symbol_roles & DEF or o.symbol.startswith("local")]
+    assert all(not o.enclosing_range for o in refs)
