@@ -1,0 +1,39 @@
+name: Bug report
+description: scip-r indexed something wrong, crashed, or produced an invalid index
+labels: ["bug"]
+body:
+  - type: textarea
+    id: snippet
+    attributes:
+      label: Minimal R snippet
+      description: The smallest R source that reproduces the problem. Put it in a code block.
+      render: r
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: e.g. "`foo` on line 3 should resolve to the package symbol, not `base`"
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+      description: Paste the relevant lines of `scip-r print index.scip`, or the traceback.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: scip-r version
+      description: Output of `scip-r --version`
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Python version and OS
+      placeholder: "Python 3.12.3, macOS 15"

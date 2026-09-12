@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint and type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --all-extras
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+
+  test:
+    name: Test (py${{ matrix.python }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv python install ${{ matrix.python }}
+      - name: Sync (tree-sitter-r is compiled from its git tag here)
+        run: uv sync --all-extras --python ${{ matrix.python }}
+      - run: uv run --python ${{ matrix.python }} pytest --cov=scipr --cov-report=xml
+      - name: Smoke-test the CLI end to end
+        run: |
+          uv run scip-r index tests/fixtures/testpkg -o index.scip --stats --emit-positions positions.json
+          uv run scip-r stats index.scip
+          uv run scip-r print index.scip --no-locals
+          uv run scip-r export index.scip --format parquet -o out-parquet
+          uv run scip-r export index.scip --format duckdb -o index.duckdb
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+
+  build:
+    name: Build sdist and wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build
+      - name: Check the wheel installs and the entry point works
+        run: |
+          uv venv /tmp/venv
+          # tree-sitter-r has no PyPI release; pre-install it from git
+          uv pip install --python /tmp/venv "tree-sitter-r @ git+https://github.com/r-lib/tree-sitter-r@v1.3.0"
+          uv pip install --python /tmp/venv dist/*.whl
+          /tmp/venv/bin/scip-r --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

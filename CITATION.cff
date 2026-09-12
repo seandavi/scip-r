@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use scip-r in your work, please cite it as below."
+title: "scip-r: a static SCIP indexer for R packages"
+type: software
+authors:
+  - family-names: Davis
+    given-names: Sean
+    email: seandavi@gmail.com
+repository-code: "https://github.com/seandavi/scip-r"
+license: MIT
+keywords:
+  - R
+  - SCIP
+  - code intelligence
+  - tree-sitter
+  - static analysis
