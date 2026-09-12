@@ -18,13 +18,36 @@ index = build_index("path/to/pkg")  # scip_pb2.Index protobuf message
 write_index(index, "index.scip")
 ```
 
-`build_index(pkg_dir, *, positions_out=None, tool_version=None)`
+`build_index(pkg_dir, *, positions_out=None, tool_version=None, manager=None, extra_arguments=None)`
 
 - `pkg_dir`: package root with `DESCRIPTION` and `R/`. A bare directory of
   `.R` files also works (name falls back to the directory name).
 - `positions_out`: pass a list to receive every guessed call site as
   `{"file", "line", "character", "name", "enclosing"}`.
+- `manager`: override the manager inferred from DESCRIPTION
+  (`biocViews` gives `bioconductor`, default `cran`).
+- `extra_arguments`: extra `key=value` provenance stamps for
+  `metadata.tool_info.arguments`.
 - Raises `NotADirectoryError` for a missing directory.
+
+For a tarball, unpack first:
+
+```python
+import tempfile
+from scipr.package import unpack_tarball, sha256_file
+
+with tempfile.TemporaryDirectory() as tmp:
+    root = unpack_tarball("pkg_1.0.tar.gz", tmp)
+    index = build_index(root, extra_arguments={"source_sha256": sha256_file("pkg_1.0.tar.gz")})
+```
+
+`scipr.package` exposes what the static pass reads: `parse_dcf`,
+`read_description` (returns `PackageInfo(name, version, manager, collate, fields)`),
+`infer_manager`, `find_r_files` (honours `Collate`), `parse_namespace` /
+`read_namespace` (`NamespaceInfo` with exports, patterns, `importFrom`
+map, `S3method` registrations), `provenance` (git commit, Bioconductor
+build fields), and `scipr.parser.index_arguments(index)` reads the
+stamps back.
 
 The returned object is the generated protobuf class
 `scipr.scip_pb2.Index`; all SCIP fields (`documents`, `external_symbols`,
@@ -57,16 +80,18 @@ print(render_text(index, show_locals=False))
 ```python
 from scipr import parse_symbol
 
-p = parse_symbol("scip-r cran stats 4.6.0 sd().")
-p.package, p.version, p.name, p.is_function  # 'stats', '4.6.0', 'sd', True
+p = parse_symbol("scip-r r stats 4.6.0 sd().")
+p.manager, p.package, p.version, p.name, p.is_function  # 'r', 'stats', '4.6.0', 'sd', True
 parse_symbol("scip-r cran pkg 1.0 width(Interval).").disambiguator  # 'Interval'
 parse_symbol("scip-r cran pkg 1.0 Foo#").is_class  # True
+parse_symbol("scip-r cran pkg 1.0 Counter#add().").owner  # 'Counter'
 parse_symbol("local 3").is_local  # True
 ```
 
-`scipr.symbols` also exposes the constructors `symbol_string`,
-`descriptor_for`, `method_descriptor` and `class_descriptor` if you emit
-symbols in the same convention from another tool.
+`scipr.symbols` also exposes the constructors `symbol_string` (with a
+`manager=` keyword), `descriptor_for`, `method_descriptor` (drops trailing
+`ANY`), `class_descriptor` and `member_descriptor` if you emit symbols in
+the same convention from another tool.
 
 ## Flatten to tables
 
@@ -79,6 +104,7 @@ from scipr.export import index_to_arrow, write_parquet, write_duckdb
 
 tables = index_to_arrow(index)  # {name: pyarrow.Table}
 write_parquet(index, "out-dir/")  # {name: Path}
+write_parquet(index, "fleet/", hive=True)  # <table>/index_package=…/index_version=…/
 write_duckdb(index, "index.duckdb", overwrite=True)  # {name: row_count}
 ```
 
@@ -88,9 +114,11 @@ A missing optional dependency raises `scipr.export.MissingExtraError`
 ## Resolve with R
 
 ```python
+from scipr.parser import index_arguments
 from scipr.resolve import resolve_index, metadata_record
 
-result = resolve_index(index, "path/to/pkg")  # runs Rscript; mutates index
+result = resolve_index(index, "path/to/pkg")  # pkgload on a checkout; mutates index
+result = resolve_index(index, installed="pkgname")  # loadNamespace on an installed package
 result.stats  # MergeStats
 result.resolution  # raw JSON from resolve.R
 record = metadata_record(
@@ -98,12 +126,13 @@ record = metadata_record(
     result.stats,
     index_path="index.resolved.scip",
     index_bytes=index.SerializeToString(),
+    source=index_arguments(index),
 )
 ```
 
 The two halves can be used separately:
 
-- `run_resolver(pkg_dir, names=None, rscript=None, timeout=600)` runs the
+- `run_resolver(pkg_dir=None, installed=None, names=None, rscript=None, timeout=600)` runs the
   bundled `resolve.R` and returns its JSON.
 - `merge_resolution(index, resolution)` applies a resolution record to an
   index in place and returns `MergeStats`. It is idempotent.
@@ -112,6 +141,21 @@ The two halves can be used separately:
 
 Errors: `RscriptNotFoundError`, `ResolverError` (carries `returncode` and
 `stderr`), and `subprocess.TimeoutExpired`.
+
+## Many packages
+
+```python
+from pathlib import Path
+from scipr.batch import BatchOptions, discover_sources, run_batch
+
+sources = discover_sources([Path("pkgs/")], manifest=None)  # dirs and tarballs
+results = run_batch(sources, Path("out/"), BatchOptions(export="parquet", hive=True), jobs=4)
+[(r.package, r.status) for r in results]
+```
+
+Each `BatchResult` records the package, status, output paths and a
+summary; `out/summary.jsonl` has one line per package. Failures are
+isolated per package.
 
 ## Stability
 
