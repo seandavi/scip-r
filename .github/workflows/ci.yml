@@ -36,6 +36,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         python: ["3.10", "3.11", "3.12", "3.13"]
+    env:
+      # Overrides the repo's .python-version so every uv command in this
+      # job uses the matrix interpreter (otherwise `uv run` recreates .venv).
+      UV_PYTHON: ${{ matrix.python }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -43,15 +47,15 @@ jobs:
           enable-cache: true
       - run: uv python install ${{ matrix.python }}
       - name: Sync (tree-sitter-r is compiled from its git tag here)
-        run: uv sync --all-extras --python ${{ matrix.python }}
-      - run: uv run --python ${{ matrix.python }} pytest --cov=scipr --cov-report=xml
+        run: uv sync --all-extras
+      - run: uv run --no-sync pytest --cov=scipr --cov-report=xml
       - name: Smoke-test the CLI end to end
         run: |
-          uv run scip-r index tests/fixtures/testpkg -o index.scip --stats --emit-positions positions.json
-          uv run scip-r stats index.scip
-          uv run scip-r print index.scip --no-locals
-          uv run scip-r export index.scip --format parquet -o out-parquet
-          uv run scip-r export index.scip --format duckdb -o index.duckdb
+          uv run --no-sync scip-r index tests/fixtures/testpkg -o index.scip --stats --emit-positions positions.json
+          uv run --no-sync scip-r stats index.scip
+          uv run --no-sync scip-r print index.scip --no-locals
+          uv run --no-sync scip-r export index.scip --format parquet -o out-parquet
+          uv run --no-sync scip-r export index.scip --format duckdb -o index.duckdb
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
         uses: actions/upload-artifact@v4
