@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: SCIP protocol questions
+    url: https://github.com/scip-code/scip
+    about: Questions about the SCIP format itself belong upstream.
+  - name: tree-sitter-r grammar bugs
+    url: https://github.com/r-lib/tree-sitter-r/issues
+    about: If R code fails to parse at all, the grammar is the place to report it.

@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest a new resolution rule, output, or CLI option
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can't you do today? An example R snippet or query helps.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Parser / symbol resolution
+        - CLI
+        - Parquet / DuckDB export
+        - languageserver resolver (actions/ls-resolve)
+        - Docs / packaging
