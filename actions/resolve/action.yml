@@ -42,7 +42,7 @@ runs:
           any::jsonlite
         working-directory: ${{ inputs.package-path }}
 
-    - uses: astral-sh/setup-uv@v6
+    - uses: astral-sh/setup-uv@v7
 
     - name: Install scip-r
       shell: bash
