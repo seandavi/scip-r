@@ -43,16 +43,16 @@ for (p in c("pkgload", "codetools", "jsonlite")) {
 }
 
 parse_args <- function(argv) {
-  out <- list(pkg = NULL, installed = NULL, out = "resolved.json", names = NULL)
+  out <- list(pkg = NULL, installed = NULL, out = "resolved.json", names = NULL, packages = NULL)
   i <- 1L
   while (i <= length(argv)) {
     a <- argv[[i]]
-    if (a %in% c("--pkg", "--installed", "--out", "--names")) {
+    if (a %in% c("--pkg", "--installed", "--out", "--names", "--packages")) {
       if (i == length(argv)) stop("missing value for ", a, call. = FALSE)
       out[[sub("^--", "", a)]] <- argv[[i + 1L]]
       i <- i + 2L
     } else if (a %in% c("-h", "--help")) {
-      cat("usage: Rscript resolve.R (--pkg DIR | --installed NAME) --out FILE [--names FILE]\n")
+      cat("usage: Rscript resolve.R (--pkg DIR | --installed NAME) --out FILE [--names FILE] [--packages FILE]\n")
       quit(status = 0)
     } else {
       stop("unknown argument: ", a, call. = FALSE)
@@ -195,9 +195,11 @@ extra_names <- character()
 if (!is.null(args$names) && nzchar(args$names) && file.exists(args$names)) {
   extra_names <- as.character(unlist(jsonlite::fromJSON(args$names, simplifyVector = TRUE)))
 }
+# Operators and syntax pseudo-functions found by codetools are noise, but
+# names scip-r asked about explicitly (S3 generics such as `[` or
+# `dimnames<-`) are kept whatever they look like.
+free_names <- free_names[grepl("^[A-Za-z.][A-Za-z0-9._]*$", free_names)]
 all_names <- sort(unique(c(free_names, extra_names)))
-# Operators and syntax pseudo-functions are noise for code intelligence.
-all_names <- all_names[grepl("^[A-Za-z.][A-Za-z0-9._]*$", all_names)]
 
 resolutions <- lapply(all_names, resolve_name)
 
@@ -292,7 +294,14 @@ random_hex <- function(n) {
 set.seed(as.integer(Sys.time()) %% .Machine$integer.max + Sys.getpid())
 run_id <- random_hex(32)
 
-loaded <- sort(loadedNamespaces())
+# Packages the static pass saw referenced (pkg::fn) that are installed but
+# not loaded still get a version and manager from their DESCRIPTION.
+referenced <- character()
+if (!is.null(args$packages) && nzchar(args$packages) && file.exists(args$packages)) {
+  referenced <- as.character(unlist(jsonlite::fromJSON(args$packages, simplifyVector = TRUE)))
+}
+installed_referenced <- referenced[vapply(referenced, function(p) nzchar(system.file(package = p)), logical(1))]
+loaded <- sort(unique(c(loadedNamespaces(), installed_referenced)))
 loaded_packages <- setNames(
   lapply(loaded, function(p) list(version = pkg_version_of(p), manager = if (identical(p, pkg_name)) own_manager else manager_of(p))),
   loaded
