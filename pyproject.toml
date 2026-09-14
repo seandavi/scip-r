@@ -61,6 +61,7 @@ dev = [
     "mypy>=1.11",
     "types-protobuf>=5",
     "pre-commit>=3.8",
+    "networkx>=3.2",
 ]
 
 [tool.uv]

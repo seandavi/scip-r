@@ -33,3 +33,6 @@ coverage.xml
 /positions.json
 *.parquet
 *.duckdb
+
+# examples: generated outputs are reproducible from run.sh
+examples/*/out/
