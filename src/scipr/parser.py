@@ -540,7 +540,9 @@ def _definer_call(src: bytes, node: Node) -> DefinerCall | None:
 
 
 def collect_top_level_symbols(
-    files: list[Path], namespace: NamespaceInfo | None = None
+    files: list[Path],
+    namespace: NamespaceInfo | None = None,
+    sources: dict[Path, bytes] | None = None,
 ) -> dict[str, TopLevelSymbol]:
     """Pass 1: find every definition at module top level, across all files,
     so cross-file references within the package resolve correctly.
@@ -549,12 +551,13 @@ def collect_top_level_symbols(
     ``setRefClass`` / ``R6Class`` classes and their members, ``setGeneric``
     and ``setMethod``. When a name is defined in more than one file the
     last file wins, mirroring R's "last source wins" collation behaviour.
-    ``namespace`` (parsed NAMESPACE) marks exported symbols.
+    ``namespace`` (parsed NAMESPACE) marks exported symbols. ``sources``
+    lets a caller that has already read the files pass their bytes in.
     """
     parser = Parser(R_LANGUAGE)
     symbols: dict[str, TopLevelSymbol] = {}
     for path in files:
-        src = path.read_bytes()
+        src = sources[path] if sources is not None else path.read_bytes()
         tree = parser.parse(src)
         for stmt in tree.root_node.children:
             sig_line = src[stmt.start_byte : stmt.end_byte].split(b"\n")[0]
@@ -1084,6 +1087,10 @@ def build_index(
         extra_arguments: additional ``key=value`` provenance stamps for
             ``metadata.tool_info.arguments`` (e.g. a tarball digest).
 
+    Besides provenance, the stamps record the input size (``source_files``,
+    ``source_lines``, ``source_bytes``) and parse health (``parse_errors``,
+    ``parse_error_documents``).
+
     Raises:
         NotADirectoryError: if ``pkg_dir`` is not a directory.
     """
@@ -1096,7 +1103,11 @@ def build_index(
     package = read_description(pkg_dir, manager=manager)
     namespace = read_namespace(pkg_dir)
     files = find_r_files(pkg_dir, package.collate)
-    top_level = collect_top_level_symbols(files, namespace)
+    # Read every file exactly once: both passes and the size stamps use
+    # these bytes. Opening freshly written files is surprisingly costly on
+    # some systems, and it dominated the batch timings before this.
+    sources = {path: path.read_bytes() for path in files}
+    top_level = collect_top_level_symbols(files, namespace, sources)
 
     parser = Parser(R_LANGUAGE)
     index = scip.Index()
@@ -1115,7 +1126,7 @@ def build_index(
 
     for path in files:
         rel = path.relative_to(pkg_dir).as_posix()
-        src = path.read_bytes()
+        src = sources[path]
         tree = parser.parse(src)
         diagnostics = collect_diagnostics(tree.root_node, rel)
         if diagnostics:
@@ -1130,6 +1141,11 @@ def build_index(
         if positions_out is not None:
             positions_out.extend(di.guessed_positions)
 
+    stamps["source_files"] = str(len(files))
+    stamps["source_lines"] = str(
+        sum(b.count(b"\n") + (1 if b and not b.endswith(b"\n") else 0) for b in sources.values())
+    )
+    stamps["source_bytes"] = str(sum(len(b) for b in sources.values()))
     stamps["parse_errors"] = str(n_parse_errors)
     stamps["parse_error_documents"] = str(n_error_docs)
     index.metadata.tool_info.arguments.extend(f"{k}={v}" for k, v in stamps.items())

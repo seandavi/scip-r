@@ -869,3 +869,11 @@ def test_parse_diagnostics_reported(make_package: MakePackage) -> None:
 def test_clean_package_has_zero_parse_error_stamps(testpkg_index: scip.Index) -> None:
     stamps = index_arguments(testpkg_index)
     assert (stamps["parse_errors"], stamps["parse_error_documents"]) == ("0", "0")
+
+
+def test_size_stamps(testpkg_index: scip.Index, testpkg_dir: Path) -> None:
+    stamps = index_arguments(testpkg_index)
+    files = sorted((testpkg_dir / "R").glob("*.R"))
+    assert stamps["source_files"] == str(len(files))
+    assert stamps["source_bytes"] == str(sum(f.stat().st_size for f in files))
+    assert stamps["source_lines"] == str(sum(len(f.read_text().splitlines()) for f in files))

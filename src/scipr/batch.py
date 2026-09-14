@@ -18,7 +18,7 @@ from typing import Any
 
 from . import __version__
 from .inspect import summarize, write_index
-from .package import find_r_files, is_tarball, read_description, sha256_file, unpack_tarball
+from .package import is_tarball, read_description, sha256_file, unpack_tarball
 from .parser import ParseDiagnostic, build_index, index_arguments
 
 
@@ -141,20 +141,15 @@ def index_one(source: Path, out_root: Path, opts: BatchOptions) -> BatchResult:
             out_dir = out_root / info.name
             out_dir.mkdir(parents=True, exist_ok=True)
             result.out_dir = str(out_dir)
-            for f in find_r_files(pkg_dir, info.collate):
-                data = f.read_bytes()
-                result.n_files += 1
-                result.source_bytes += len(data)
-                result.n_lines += data.count(b"\n") + (
-                    1 if data and not data.endswith(b"\n") else 0
-                )
-
             diagnostics: list[ParseDiagnostic] = []
             index = build_index(
                 pkg_dir, manager=opts.manager, extra_arguments=extra, diagnostics_out=diagnostics
             )
             t = lap("index", t)
             stamps = index_arguments(index)
+            result.n_files = int(stamps.get("source_files", "0"))
+            result.n_lines = int(stamps.get("source_lines", "0"))
+            result.source_bytes = int(stamps.get("source_bytes", "0"))
             result.parse_errors = int(stamps.get("parse_errors", "0"))
             result.parse_error_documents = int(stamps.get("parse_error_documents", "0"))
             if diagnostics:
