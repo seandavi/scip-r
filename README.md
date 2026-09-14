@@ -56,16 +56,16 @@ approach that gives useful answers: a syntax-directed pass over
 ## How it works
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph inputs["Inputs"]
-        direction TB
+        direction LR
         checkout["Package checkout<br/>DESCRIPTION · NAMESPACE · R/"]
         tarball["Source tarball<br/>CRAN / Bioconductor .tar.gz"]
         manifest["Many packages<br/>directory or manifest"]
     end
 
     subgraph static["Static pass · scip-r index · no R needed"]
-        direction TB
+        direction LR
         parse["tree-sitter-r parse"]
         pass1["Pass 1: symbol table<br/>assignments, setClass/setGeneric/setMethod,<br/>R6/RC members, NAMESPACE exports · importFrom · S3method"]
         pass2["Pass 2: occurrences<br/>definitions, references, locals,<br/>pkg::fn and pkg:::fn, enclosing ranges"]
@@ -74,7 +74,7 @@ flowchart LR
     end
 
     subgraph resolver["Optional second pass · scip-r resolve · needs R"]
-        direction TB
+        direction LR
         load["pkgload::load_all (checkout)<br/>or loadNamespace (--installed)"]
         lookup["codetools free names →<br/>namespace / imports / base lookup"]
         inventory["S3 · S4 · R6 inventory,<br/>class hierarchy, installed versions"]
@@ -83,7 +83,7 @@ flowchart LR
     end
 
     subgraph outputs["Outputs"]
-        direction TB
+        direction LR
         scip["index.scip<br/>SCIP protobuf"]
         resolved["index.resolved.scip<br/>guesses replaced, versions + managers,<br/>method → generic links"]
         meta["index.resolved.scip.meta.json<br/>joins on run_id / sha256"]
@@ -92,7 +92,7 @@ flowchart LR
     end
 
     subgraph consumers["Consumers"]
-        direction TB
+        direction LR
         sg["Sourcegraph · scip CLI"]
         sql["DuckDB / SQL analytics<br/>call graphs, API surface,<br/>ecosystem-wide usage"]
     end
