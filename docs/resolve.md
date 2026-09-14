@@ -107,7 +107,7 @@ stamps the run id.
 Loading a package runs its `.onLoad` hook and, with `--pkg`, may compile
 its `src/`. For untrusted packages (an ecosystem crawl), run the resolver
 in a container without network access and as an unprivileged user, and
-keep `--timeout`. See issue #34 for the fuller stance.
+keep `--timeout`. The fuller stance is in [security.md](security.md).
 
 ## What it still does not do
 
