@@ -52,7 +52,8 @@ uses [Semantic Versioning](https://semver.org/).
 - Export tables gain `tool_arguments`, `resolve_run_id` (metadata) and
   `disambiguator`, `is_method`, `is_class` (parsed symbol columns).
 - Docs: `docs/parquet-schema.md`, `docs/python-api.md`, `docs/resolve.md`,
-  `docs/adr/0001-r-based-resolution.md`.
+  `docs/security.md`, `docs/adr/0001-r-based-resolution.md`, and an
+  architecture diagram in the README.
 - `actions/resolve/` composite action (index + resolve with R in CI); an
   R job in CI runs the resolver end to end on the fixture package.
 - `scip-r` is now a typer application with subcommands: `index`, `stats`,

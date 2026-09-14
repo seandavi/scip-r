@@ -53,6 +53,75 @@ indexer, static or otherwise. scip-r fills that gap with the cheapest
 approach that gives useful answers: a syntax-directed pass over
 [tree-sitter-r](https://github.com/r-lib/tree-sitter-r) parse trees.
 
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph inputs["Inputs"]
+        direction TB
+        checkout["Package checkout<br/>DESCRIPTION · NAMESPACE · R/"]
+        tarball["Source tarball<br/>CRAN / Bioconductor .tar.gz"]
+        manifest["Many packages<br/>directory or manifest"]
+    end
+
+    subgraph static["Static pass · scip-r index · no R needed"]
+        direction TB
+        parse["tree-sitter-r parse"]
+        pass1["Pass 1: symbol table<br/>assignments, setClass/setGeneric/setMethod,<br/>R6/RC members, NAMESPACE exports · importFrom · S3method"]
+        pass2["Pass 2: occurrences<br/>definitions, references, locals,<br/>pkg::fn and pkg:::fn, enclosing ranges"]
+        guess["Unresolved calls<br/>guessed as base, flagged"]
+        parse --> pass1 --> pass2 --> guess
+    end
+
+    subgraph resolver["Optional second pass · scip-r resolve · needs R"]
+        direction TB
+        load["pkgload::load_all (checkout)<br/>or loadNamespace (--installed)"]
+        lookup["codetools free names →<br/>namespace / imports / base lookup"]
+        inventory["S3 · S4 · R6 inventory,<br/>class hierarchy, installed versions"]
+        env["Environment record<br/>R version, platform, Bioc release,<br/>loaded namespaces, run_id"]
+        load --> lookup --> inventory --> env
+    end
+
+    subgraph outputs["Outputs"]
+        direction TB
+        scip["index.scip<br/>SCIP protobuf"]
+        resolved["index.resolved.scip<br/>guesses replaced, versions + managers,<br/>method → generic links"]
+        meta["index.resolved.scip.meta.json<br/>joins on run_id / sha256"]
+        tables["Parquet / DuckDB tables<br/>flat or hive-partitioned"]
+        summary["summary.jsonl<br/>(batch)"]
+    end
+
+    subgraph consumers["Consumers"]
+        direction TB
+        sg["Sourcegraph · scip CLI"]
+        sql["DuckDB / SQL analytics<br/>call graphs, API surface,<br/>ecosystem-wide usage"]
+    end
+
+    checkout --> parse
+    tarball --> parse
+    manifest -->|scip-r batch| parse
+    guess --> scip
+    scip -->|guessed names| load
+    env -->|JSON| merge["Merge into index"]
+    scip --> merge
+    merge --> resolved
+    merge --> meta
+    scip -->|scip-r export| tables
+    resolved -->|scip-r export| tables
+    manifest -.-> summary
+    scip --> sg
+    resolved --> sg
+    tables --> sql
+    meta --> sql
+
+    classDef opt stroke-dasharray: 5 5
+    class resolver,resolved,meta opt
+```
+
+Solid boxes need only Python and a C compiler. The dashed stage is the
+optional R-backed resolver; it replaced an earlier languageserver-based
+design (see [ADR 0001](docs/adr/0001-r-based-resolution.md) for why).
+
 ## Quick start
 
 ```bash
@@ -255,6 +324,8 @@ models dispatch the SCIP way: call sites point at the generic and each
 method carries an implementation relationship.
 
 Details, requirements and the JSON contract: [docs/resolve.md](docs/resolve.md).
+It runs the package's code, so read [docs/security.md](docs/security.md)
+before pointing it at packages you do not trust.
 Design rationale: [ADR 0001](docs/adr/0001-r-based-resolution.md).
 For CI, [`actions/resolve/`](actions/resolve/) runs both passes.
 
