@@ -50,6 +50,7 @@ uv run scip-r index tests/fixtures/testpkg -o /tmp/index.scip --stats
 | `actions/resolve/` | composite GitHub Action running both passes |
 | `docs/` | ADRs, Parquet schema, Python API, resolver guide, security stance |
 | `examples/limma/` | reproducible call-graph example on a real package (networkx and igraph) |
+| `benchmarks/` | robustness sweep over a whole repository (`sweep.py`), results, tier-2/3 plans |
 | `tests/fixtures/testpkg` | tiny R package used by most tests, plus its golden index |
 
 ## Adding a parser change
