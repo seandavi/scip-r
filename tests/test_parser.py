@@ -42,25 +42,25 @@ def test_read_description_missing_fields(make_package: MakePackage) -> None:
     assert (info.name, info.version) == ("onlyname", "0.0.0")
 
 
-def test_find_r_files_only_under_R_dir_recursively_and_sorted(make_package: MakePackage) -> None:
+def test_find_r_files_only_directly_under_R_dir_and_sorted(make_package: MakePackage) -> None:
     root = make_package(
         {
             "R/zeta.R": "",
             "R/alpha.r": "",
-            "R/sub/nested.R": "",
+            "R/sub/nested.R": "",  # R CMD INSTALL ignores R/ subdirectories
             "R/notes.txt": "",
             "tests/testthat/test-x.R": "",
             "vignettes/v.R": "",
         }
     )
     rel = [p.relative_to(root).as_posix() for p in find_r_files(root)]
-    assert rel == ["R/alpha.r", "R/sub/nested.R", "R/zeta.R"]
+    assert rel == ["R/alpha.r", "R/zeta.R"]
 
 
 def test_find_r_files_without_R_dir_searches_whole_tree(make_package: MakePackage) -> None:
     root = make_package({"a.R": "", "deep/b.R": ""}, description=False)
     rel = [p.relative_to(root).as_posix() for p in find_r_files(root)]
-    assert rel == ["a.R", "deep/b.R"]
+    assert rel == ["a.R", "deep/b.R"]  # loose scripts: recursive
 
 
 def test_build_index_rejects_non_directory(tmp_path: Path) -> None:
@@ -121,9 +121,9 @@ def test_tool_version_override(testpkg_dir: Path) -> None:
 
 
 def test_relative_paths_are_posix(make_package: MakePackage) -> None:
-    root = make_package({"R/sub/dir/f.R": "f <- function() 1\n"})
+    root = make_package({"sub/dir/f.R": "f <- function() 1\n"}, description=False)
     idx = build_index(root)
-    assert idx.documents[0].relative_path == "R/sub/dir/f.R"
+    assert idx.documents[0].relative_path == "sub/dir/f.R"
 
 
 # --- resolution on the fixture package --------------------------------------
@@ -831,3 +831,41 @@ def test_s3_registered_alias_is_a_function(make_package: MakePackage) -> None:
     alias = syms["scip-r cran pkg 1.0.0 dimnames<-.MAList()."]
     assert alias.kind == scip.SymbolInformation.Kind.Function
     assert [r.symbol for r in alias.relationships] == ["scip-r . base . dimnames<-()."]
+
+
+# --- parse diagnostics ---------------------------------------------------------------
+
+
+def test_parse_diagnostics_reported(make_package: MakePackage) -> None:
+    from scipr.parser import collect_diagnostics
+
+    root = make_package(
+        {
+            "R/ok.R": "f <- function(x) x\n",
+            "R/bad.R": "h <- 1\ng <- function(x) {\n  x +\n}\nk <- function( { 2\n",
+        }
+    )
+    diags: list = []
+    idx = build_index(root, diagnostics_out=diags)
+    stamps = index_arguments(idx)
+    assert stamps["parse_errors"] == str(len(diags)) and len(diags) >= 2
+    assert stamps["parse_error_documents"] == "1"
+    assert {d["file"] for d in diags} == {"R/bad.R"}
+    assert {d["kind"] for d in diags} <= {"error", "missing"}
+    assert diags == sorted(diags, key=lambda d: (d["line"], d["character"]))
+    # the parts of a broken file before the damage are still indexed; what
+    # tree-sitter swallows into its recovery region is not
+    assert "scip-r cran pkg 1.0.0 h." in symbols_at(idx, "R/bad.R")
+    assert all(d["line"] >= 1 for d in diags)
+    # clean trees short-circuit
+    from tree_sitter import Parser
+
+    from scipr.package import R_LANGUAGE
+
+    tree = Parser(R_LANGUAGE).parse(b"f <- function(x) x\n")
+    assert collect_diagnostics(tree.root_node, "x.R") == []
+
+
+def test_clean_package_has_zero_parse_error_stamps(testpkg_index: scip.Index) -> None:
+    stamps = index_arguments(testpkg_index)
+    assert (stamps["parse_errors"], stamps["parse_error_documents"]) == ("0", "0")

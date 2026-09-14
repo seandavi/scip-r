@@ -108,23 +108,30 @@ def read_description(pkg_dir: Path | str, *, manager: str | None = None) -> Pack
 
 
 def find_r_files(pkg_dir: Path | str, collate: tuple[str, ...] | list[str] = ()) -> list[Path]:
-    """All ``.R``/``.r`` files under ``<pkg>/R/`` (recursively).
+    """All ``.R``/``.r`` files directly under ``<pkg>/R/``.
 
     Files named in ``collate`` come first, in that order (R sources them in
     ``Collate`` order, so a later file's definition wins); the rest follow
-    sorted. Dotfiles and dot-directories are skipped, as R does. If there is
-    no ``R/`` directory the whole tree is searched, so a loose directory of
-    scripts can still be indexed.
+    sorted. Subdirectories of ``R/`` and dotfiles are skipped, as R does. If
+    there is no ``R/`` directory the whole tree is searched recursively, so
+    a loose directory of scripts can still be indexed.
     """
     pkg_dir = Path(pkg_dir)
     r_dir = pkg_dir / "R"
-    root = r_dir if r_dir.is_dir() else pkg_dir
+    if r_dir.is_dir():
+        # R CMD INSTALL sources only the files directly in R/; subdirectories
+        # (R/TODO, R/examples, ...) are ignored, and so are dotfiles (which
+        # also skips macOS "._foo.R" AppleDouble files).
+        root = r_dir
+        candidates = r_dir.iterdir()
+    else:
+        root = pkg_dir
+        candidates = pkg_dir.rglob("*")
     found = sorted(
         p
-        for p in root.rglob("*")
+        for p in candidates
         if p.is_file()
         and p.suffix in R_SOURCE_SUFFIXES
-        # R ignores dotfiles (and so skips macOS "._foo.R" AppleDouble files)
         and not p.name.startswith(".")
         and not any(part.startswith(".") for part in p.relative_to(root).parts[:-1])
     )

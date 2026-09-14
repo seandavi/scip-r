@@ -60,8 +60,10 @@ __all__ = [
     "DocumentIndexer",
     "GuessedPosition",
     "PackageInfo",
+    "ParseDiagnostic",
     "TopLevelSymbol",
     "build_index",
+    "collect_diagnostics",
     "collect_top_level_symbols",
     "find_r_files",
     "read_description",
@@ -93,6 +95,52 @@ RC_SECTIONS = ("methods", "fields")
 SELF_NAMES = frozenset({"self", "private", ".self"})
 
 Range = tuple[int, ...]
+
+
+class ParseDiagnostic(TypedDict):
+    """A place where tree-sitter could not parse the source.
+
+    ``kind`` is ``"error"`` for an ``ERROR`` node (unexpected tokens) or
+    ``"missing"`` for a token the parser had to invent to recover.
+    Occurrences inside error regions are still emitted where the walker
+    can make sense of them, so counts here measure how much of a file the
+    index may be wrong about, not how much was skipped.
+    """
+
+    file: str
+    line: int
+    character: int
+    end_line: int
+    end_character: int
+    kind: str
+
+
+def collect_diagnostics(root: Node, relative_path: str) -> list[ParseDiagnostic]:
+    """Every ``ERROR`` or missing node under ``root``. Cheap when the tree
+    has no errors (``root.has_error`` short-circuits)."""
+    if not root.has_error:
+        return []
+    out: list[ParseDiagnostic] = []
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.is_error or node.is_missing:
+            (sl, sc), (el, ec) = node.start_point, node.end_point
+            out.append(
+                {
+                    "file": relative_path,
+                    "line": sl,
+                    "character": sc,
+                    "end_line": el,
+                    "end_character": ec,
+                    "kind": "missing" if node.is_missing else "error",
+                }
+            )
+            if node.is_missing:
+                continue
+        stack.extend(reversed(node.children))
+    out.sort(key=lambda d: (d["line"], d["character"]))
+    return out
 
 
 class GuessedPosition(TypedDict):
@@ -1010,6 +1058,7 @@ def build_index(
     pkg_dir: Path | str,
     *,
     positions_out: list[GuessedPosition] | None = None,
+    diagnostics_out: list[ParseDiagnostic] | None = None,
     tool_version: str | None = None,
     manager: str | None = None,
     extra_arguments: dict[str, str] | None = None,
@@ -1023,6 +1072,11 @@ def build_index(
         positions_out: if a list is passed, it is extended in place with
             every guessed-external call site across the package as
             ``{"file", "line", "character", "name", "enclosing"}``.
+        diagnostics_out: if a list is passed, it is extended in place with
+            every tree-sitter parse error (see :class:`ParseDiagnostic`).
+            The package-level totals are always stamped into
+            ``tool_info.arguments`` as ``parse_errors`` and
+            ``parse_error_documents``.
         tool_version: recorded in ``metadata.tool_info.version``; defaults
             to scip-r's own version.
         manager: override the inferred package manager (``cran``,
@@ -1054,20 +1108,31 @@ def build_index(
     stamps = {"package": package.name, "version": package.version, "manager": package.manager}
     stamps.update(provenance(pkg_dir, package.fields))
     stamps.update(extra_arguments or {})
-    index.metadata.tool_info.arguments.extend(f"{k}={v}" for k, v in stamps.items())
 
     all_external: dict[str, ExternalRef] = {}
+    n_parse_errors = 0
+    n_error_docs = 0
 
     for path in files:
         rel = path.relative_to(pkg_dir).as_posix()
         src = path.read_bytes()
         tree = parser.parse(src)
+        diagnostics = collect_diagnostics(tree.root_node, rel)
+        if diagnostics:
+            n_parse_errors += len(diagnostics)
+            n_error_docs += 1
+            if diagnostics_out is not None:
+                diagnostics_out.extend(diagnostics)
         di = DocumentIndexer(src, rel, package, top_level, namespace)
         di.index(tree.root_node)
         index.documents.append(di.document)
         all_external.update(di.external_refs)
         if positions_out is not None:
             positions_out.extend(di.guessed_positions)
+
+    stamps["parse_errors"] = str(n_parse_errors)
+    stamps["parse_error_documents"] = str(n_error_docs)
+    index.metadata.tool_info.arguments.extend(f"{k}={v}" for k, v in stamps.items())
 
     for _symbol, ref in sorted(all_external.items()):
         info = index.external_symbols.add()
