@@ -1,0 +1,21 @@
+{
+  "started_utc": "2026-09-14T13:11:27Z",
+  "scip_r_version": "0.2.0",
+  "python": "3.13.3",
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "cpu_count": 16,
+  "jobs": 8,
+  "n_sources": 2384,
+  "options": {
+    "resolve": false,
+    "export": null,
+    "hive": false,
+    "manager": null,
+    "rscript": null,
+    "timeout": 600.0
+  },
+  "elapsed_seconds": 207.061,
+  "ok": 2384,
+  "failed": 0
+}
