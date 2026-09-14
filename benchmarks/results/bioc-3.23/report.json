@@ -1,0 +1,317 @@
+{
+  "meta": {
+    "started_utc": "2026-09-14T13:11:27Z",
+    "scip_r_version": "0.2.0",
+    "python": "3.13.3",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "cpu_count": 16,
+    "jobs": 8,
+    "n_sources": 2384,
+    "options": {
+      "resolve": false,
+      "export": null,
+      "hive": false,
+      "manager": null,
+      "rscript": null,
+      "timeout": 600.0
+    },
+    "elapsed_seconds": 207.061,
+    "ok": 2384,
+    "failed": 0
+  },
+  "packages": {
+    "total": 2384,
+    "ok": 2384,
+    "failed": 0
+  },
+  "size": {
+    "files": 35161,
+    "lines": 7350631,
+    "source_mb": 280.9
+  },
+  "output": {
+    "symbols": 175995,
+    "occurrences": 11526363,
+    "external_symbols": 319480,
+    "guessed_external_symbols": 224845,
+    "guessed_fraction": 0.7038
+  },
+  "throughput": {
+    "wall_seconds": 207.061,
+    "cpu_seconds_index": 1021.14,
+    "lines_per_cpu_second": 7198,
+    "packages_per_minute_wall": 690.8
+  },
+  "timing_total_s": {
+    "n": 2384,
+    "min": 0.0259,
+    "p50": 0.5246,
+    "p90": 1.4189,
+    "p99": 3.1035,
+    "max": 12.7179,
+    "mean": 0.6937,
+    "sum": 1653.754
+  },
+  "timing_index_s": {
+    "n": 2384,
+    "min": 0.0113,
+    "p50": 0.3116,
+    "p90": 0.9491,
+    "p99": 2.117,
+    "max": 4.3772,
+    "mean": 0.4283,
+    "sum": 1021.136
+  },
+  "timing_index_ms_per_kloc": {
+    "n": 2382,
+    "min": 6.9281,
+    "p50": 175.2206,
+    "p90": 632.3438,
+    "p99": 2046.5856,
+    "max": 57333.3333,
+    "mean": 347.1679,
+    "sum": 826954.004
+  },
+  "peak_rss_mib": {
+    "n": 2384,
+    "min": 36.8,
+    "p50": 65.1,
+    "p90": 241.9,
+    "p99": 241.9,
+    "max": 241.9,
+    "mean": 91.6987,
+    "sum": 218609.6
+  },
+  "parse_errors": {
+    "packages_with_errors": 2,
+    "packages_with_errors_pct": 0.08,
+    "documents_with_errors": 2,
+    "error_nodes": 17
+  },
+  "failures": {
+    "by_kind": {},
+    "packages": []
+  },
+  "slowest": [
+    {
+      "package": "mzR",
+      "lines": 1203,
+      "total_s": 12.7179
+    },
+    {
+      "package": "Rarr",
+      "lines": 2836,
+      "total_s": 5.891
+    },
+    {
+      "package": "mixOmics",
+      "lines": 41494,
+      "total_s": 5.5467
+    },
+    {
+      "package": "Rcpi",
+      "lines": 8970,
+      "total_s": 5.5449
+    },
+    {
+      "package": "RbowtieCuda",
+      "lines": 376,
+      "total_s": 5.1819
+    },
+    {
+      "package": "Rigraphlib",
+      "lines": 119,
+      "total_s": 5.0923
+    },
+    {
+      "package": "GladiaTOX",
+      "lines": 14625,
+      "total_s": 4.7533
+    },
+    {
+      "package": "affxparser",
+      "lines": 10086,
+      "total_s": 4.4686
+    },
+    {
+      "package": "OmnipathR",
+      "lines": 33116,
+      "total_s": 4.3757
+    },
+    {
+      "package": "Rhdf5lib",
+      "lines": 175,
+      "total_s": 4.2973
+    },
+    {
+      "package": "MetMashR",
+      "lines": 11530,
+      "total_s": 4.0377
+    },
+    {
+      "package": "Rbowtie2",
+      "lines": 971,
+      "total_s": 3.9178
+    },
+    {
+      "package": "goProfiles",
+      "lines": 3470,
+      "total_s": 3.8484
+    },
+    {
+      "package": "RCy3",
+      "lines": 16900,
+      "total_s": 3.6537
+    },
+    {
+      "package": "openPrimeR",
+      "lines": 22195,
+      "total_s": 3.5394
+    }
+  ],
+  "slowest_per_kloc": [
+    {
+      "package": "goProfiles",
+      "lines": 3470,
+      "ms_per_kloc": 874.8
+    },
+    {
+      "package": "BiocGenerics",
+      "lines": 2060,
+      "ms_per_kloc": 873.8
+    },
+    {
+      "package": "rsbml",
+      "lines": 2439,
+      "ms_per_kloc": 864.2
+    },
+    {
+      "package": "mirTarRnaSeq",
+      "lines": 2174,
+      "ms_per_kloc": 821.4
+    },
+    {
+      "package": "combi",
+      "lines": 3046,
+      "ms_per_kloc": 790.1
+    },
+    {
+      "package": "Pigengene",
+      "lines": 3687,
+      "ms_per_kloc": 668.2
+    },
+    {
+      "package": "MSA2dist",
+      "lines": 3317,
+      "ms_per_kloc": 609.3
+    },
+    {
+      "package": "spiky",
+      "lines": 2089,
+      "ms_per_kloc": 590.8
+    },
+    {
+      "package": "rcellminer",
+      "lines": 2665,
+      "ms_per_kloc": 565.0
+    },
+    {
+      "package": "siggenes",
+      "lines": 4303,
+      "ms_per_kloc": 542.3
+    }
+  ],
+  "most_parse_errors": [
+    {
+      "package": "ggtree",
+      "error_nodes": 9,
+      "documents": 1,
+      "diagnostics": "/private/tmp/claude-502/-Users-davsean-Documents-git-scip-r/5406c331-21e9-49de-9ef3-40cd05b97970/scratchpad/sweep-bioc/batch/ggtree/diagnostics.json"
+    },
+    {
+      "package": "PharmacoGx",
+      "error_nodes": 8,
+      "documents": 1,
+      "diagnostics": "/private/tmp/claude-502/-Users-davsean-Documents-git-scip-r/5406c331-21e9-49de-9ef3-40cd05b97970/scratchpad/sweep-bioc/batch/PharmacoGx/diagnostics.json"
+    }
+  ],
+  "implausible_output": [
+    {
+      "package": "AHMassBank",
+      "files": 1,
+      "symbols": 0,
+      "occurrences": 0
+    },
+    {
+      "package": "alabaster",
+      "files": 1,
+      "symbols": 0,
+      "occurrences": 0
+    },
+    {
+      "package": "assorthead",
+      "files": 1,
+      "symbols": 0,
+      "occurrences": 0
+    },
+    {
+      "package": "convert",
+      "files": 3,
+      "symbols": 0,
+      "occurrences": 497
+    }
+  ],
+  "guess_heavy": [
+    {
+      "package": "ABSSeq",
+      "guessed": 80,
+      "external": 80
+    },
+    {
+      "package": "AIMS",
+      "guessed": 35,
+      "external": 35
+    },
+    {
+      "package": "AGDEX",
+      "guessed": 73,
+      "external": 73
+    },
+    {
+      "package": "ARRmNormalization",
+      "guessed": 46,
+      "external": 46
+    },
+    {
+      "package": "ASGSCA",
+      "guessed": 41,
+      "external": 41
+    },
+    {
+      "package": "AffyRNADegradation",
+      "guessed": 75,
+      "external": 75
+    },
+    {
+      "package": "AgiMicroRna",
+      "guessed": 133,
+      "external": 133
+    },
+    {
+      "package": "Anaquin",
+      "guessed": 110,
+      "external": 110
+    },
+    {
+      "package": "BAGS",
+      "guessed": 22,
+      "external": 22
+    },
+    {
+      "package": "BADER",
+      "guessed": 40,
+      "external": 40
+    }
+  ]
+}

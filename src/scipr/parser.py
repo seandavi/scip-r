@@ -60,8 +60,10 @@ __all__ = [
     "DocumentIndexer",
     "GuessedPosition",
     "PackageInfo",
+    "ParseDiagnostic",
     "TopLevelSymbol",
     "build_index",
+    "collect_diagnostics",
     "collect_top_level_symbols",
     "find_r_files",
     "read_description",
@@ -93,6 +95,52 @@ RC_SECTIONS = ("methods", "fields")
 SELF_NAMES = frozenset({"self", "private", ".self"})
 
 Range = tuple[int, ...]
+
+
+class ParseDiagnostic(TypedDict):
+    """A place where tree-sitter could not parse the source.
+
+    ``kind`` is ``"error"`` for an ``ERROR`` node (unexpected tokens) or
+    ``"missing"`` for a token the parser had to invent to recover.
+    Occurrences inside error regions are still emitted where the walker
+    can make sense of them, so counts here measure how much of a file the
+    index may be wrong about, not how much was skipped.
+    """
+
+    file: str
+    line: int
+    character: int
+    end_line: int
+    end_character: int
+    kind: str
+
+
+def collect_diagnostics(root: Node, relative_path: str) -> list[ParseDiagnostic]:
+    """Every ``ERROR`` or missing node under ``root``. Cheap when the tree
+    has no errors (``root.has_error`` short-circuits)."""
+    if not root.has_error:
+        return []
+    out: list[ParseDiagnostic] = []
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.is_error or node.is_missing:
+            (sl, sc), (el, ec) = node.start_point, node.end_point
+            out.append(
+                {
+                    "file": relative_path,
+                    "line": sl,
+                    "character": sc,
+                    "end_line": el,
+                    "end_character": ec,
+                    "kind": "missing" if node.is_missing else "error",
+                }
+            )
+            if node.is_missing:
+                continue
+        stack.extend(reversed(node.children))
+    out.sort(key=lambda d: (d["line"], d["character"]))
+    return out
 
 
 class GuessedPosition(TypedDict):
@@ -492,7 +540,9 @@ def _definer_call(src: bytes, node: Node) -> DefinerCall | None:
 
 
 def collect_top_level_symbols(
-    files: list[Path], namespace: NamespaceInfo | None = None
+    files: list[Path],
+    namespace: NamespaceInfo | None = None,
+    sources: dict[Path, bytes] | None = None,
 ) -> dict[str, TopLevelSymbol]:
     """Pass 1: find every definition at module top level, across all files,
     so cross-file references within the package resolve correctly.
@@ -501,12 +551,13 @@ def collect_top_level_symbols(
     ``setRefClass`` / ``R6Class`` classes and their members, ``setGeneric``
     and ``setMethod``. When a name is defined in more than one file the
     last file wins, mirroring R's "last source wins" collation behaviour.
-    ``namespace`` (parsed NAMESPACE) marks exported symbols.
+    ``namespace`` (parsed NAMESPACE) marks exported symbols. ``sources``
+    lets a caller that has already read the files pass their bytes in.
     """
     parser = Parser(R_LANGUAGE)
     symbols: dict[str, TopLevelSymbol] = {}
     for path in files:
-        src = path.read_bytes()
+        src = sources[path] if sources is not None else path.read_bytes()
         tree = parser.parse(src)
         for stmt in tree.root_node.children:
             sig_line = src[stmt.start_byte : stmt.end_byte].split(b"\n")[0]
@@ -1010,6 +1061,7 @@ def build_index(
     pkg_dir: Path | str,
     *,
     positions_out: list[GuessedPosition] | None = None,
+    diagnostics_out: list[ParseDiagnostic] | None = None,
     tool_version: str | None = None,
     manager: str | None = None,
     extra_arguments: dict[str, str] | None = None,
@@ -1023,12 +1075,21 @@ def build_index(
         positions_out: if a list is passed, it is extended in place with
             every guessed-external call site across the package as
             ``{"file", "line", "character", "name", "enclosing"}``.
+        diagnostics_out: if a list is passed, it is extended in place with
+            every tree-sitter parse error (see :class:`ParseDiagnostic`).
+            The package-level totals are always stamped into
+            ``tool_info.arguments`` as ``parse_errors`` and
+            ``parse_error_documents``.
         tool_version: recorded in ``metadata.tool_info.version``; defaults
             to scip-r's own version.
         manager: override the inferred package manager (``cran``,
             ``bioconductor``, ...), used in this package's symbols.
         extra_arguments: additional ``key=value`` provenance stamps for
             ``metadata.tool_info.arguments`` (e.g. a tarball digest).
+
+    Besides provenance, the stamps record the input size (``source_files``,
+    ``source_lines``, ``source_bytes``) and parse health (``parse_errors``,
+    ``parse_error_documents``).
 
     Raises:
         NotADirectoryError: if ``pkg_dir`` is not a directory.
@@ -1042,7 +1103,11 @@ def build_index(
     package = read_description(pkg_dir, manager=manager)
     namespace = read_namespace(pkg_dir)
     files = find_r_files(pkg_dir, package.collate)
-    top_level = collect_top_level_symbols(files, namespace)
+    # Read every file exactly once: both passes and the size stamps use
+    # these bytes. Opening freshly written files is surprisingly costly on
+    # some systems, and it dominated the batch timings before this.
+    sources = {path: path.read_bytes() for path in files}
+    top_level = collect_top_level_symbols(files, namespace, sources)
 
     parser = Parser(R_LANGUAGE)
     index = scip.Index()
@@ -1054,20 +1119,36 @@ def build_index(
     stamps = {"package": package.name, "version": package.version, "manager": package.manager}
     stamps.update(provenance(pkg_dir, package.fields))
     stamps.update(extra_arguments or {})
-    index.metadata.tool_info.arguments.extend(f"{k}={v}" for k, v in stamps.items())
 
     all_external: dict[str, ExternalRef] = {}
+    n_parse_errors = 0
+    n_error_docs = 0
 
     for path in files:
         rel = path.relative_to(pkg_dir).as_posix()
-        src = path.read_bytes()
+        src = sources[path]
         tree = parser.parse(src)
+        diagnostics = collect_diagnostics(tree.root_node, rel)
+        if diagnostics:
+            n_parse_errors += len(diagnostics)
+            n_error_docs += 1
+            if diagnostics_out is not None:
+                diagnostics_out.extend(diagnostics)
         di = DocumentIndexer(src, rel, package, top_level, namespace)
         di.index(tree.root_node)
         index.documents.append(di.document)
         all_external.update(di.external_refs)
         if positions_out is not None:
             positions_out.extend(di.guessed_positions)
+
+    stamps["source_files"] = str(len(files))
+    stamps["source_lines"] = str(
+        sum(b.count(b"\n") + (1 if b and not b.endswith(b"\n") else 0) for b in sources.values())
+    )
+    stamps["source_bytes"] = str(sum(len(b) for b in sources.values()))
+    stamps["parse_errors"] = str(n_parse_errors)
+    stamps["parse_error_documents"] = str(n_error_docs)
+    index.metadata.tool_info.arguments.extend(f"{k}={v}" for k, v in stamps.items())
 
     for _symbol, ref in sorted(all_external.items()):
         info = index.external_symbols.add()

@@ -1,0 +1,74 @@
+[
+ {
+  "file": "R/tree-utilities.R",
+  "line": 0,
+  "character": 0,
+  "end_line": 1633,
+  "end_character": 0,
+  "kind": "error"
+ },
+ {
+  "file": "R/tree-utilities.R",
+  "line": 528,
+  "character": 41,
+  "end_line": 529,
+  "end_character": 7,
+  "kind": "error"
+ },
+ {
+  "file": "R/tree-utilities.R",
+  "line": 528,
+  "character": 41,
+  "end_line": 528,
+  "end_character": 44,
+  "kind": "error"
+ },
+ {
+  "file": "R/tree-utilities.R",
+  "line": 529,
+  "character": 15,
+  "end_line": 529,
+  "end_character": 17,
+  "kind": "error"
+ },
+ {
+  "file": "R/tree-utilities.R",
+  "line": 533,
+  "character": 4,
+  "end_line": 535,
+  "end_character": 16,
+  "kind": "error"
+ },
+ {
+  "file": "R/tree-utilities.R",
+  "line": 533,
+  "character": 4,
+  "end_line": 534,
+  "end_character": 3,
+  "kind": "error"
+ },
+ {
+  "file": "R/tree-utilities.R",
+  "line": 535,
+  "character": 54,
+  "end_line": 535,
+  "end_character": 54,
+  "kind": "missing"
+ },
+ {
+  "file": "R/tree-utilities.R",
+  "line": 562,
+  "character": 0,
+  "end_line": 562,
+  "end_character": 1,
+  "kind": "error"
+ },
+ {
+  "file": "R/tree-utilities.R",
+  "line": 562,
+  "character": 0,
+  "end_line": 562,
+  "end_character": 1,
+  "kind": "error"
+ }
+]

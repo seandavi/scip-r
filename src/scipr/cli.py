@@ -159,6 +159,14 @@ def index(
 
     if stats:
         typer.echo(f"{output}: {summarize(idx).one_line()}", err=True)
+        stamps = index_arguments(idx)
+        if stamps.get("parse_errors", "0") != "0":
+            typer.echo(
+                f"warning: {stamps['parse_errors']} parse errors in "
+                f"{stamps.get('parse_error_documents', '?')} files; occurrences in those "
+                "regions may be wrong",
+                err=True,
+            )
 
 
 @app.command()

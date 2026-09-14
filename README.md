@@ -295,6 +295,14 @@ and igraph: most-called helpers, PageRank, entry-point reach, dependency
 usage, and a rendered picture of the busiest functions. One script
 reproduces it.
 
+## Benchmarks
+
+[benchmarks/](benchmarks/) holds a robustness sweep that indexes every
+package of a CRAN-style repository with the static pass and reports
+failures, parse errors, and timing and memory distributions;
+[benchmarks/RESULTS.md](benchmarks/RESULTS.md) has the numbers for the
+Bioconductor software set.
+
 ## Symbol scheme
 
 Package-level: `scip-r <manager> <package> <version> <descriptor>` where

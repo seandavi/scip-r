@@ -8,6 +8,17 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Parse diagnostics: every index stamps `parse_errors` and
+  `parse_error_documents` (tree-sitter error and missing nodes) into
+  `tool_info.arguments`; `build_index(diagnostics_out=...)` returns the
+  positions; `scip-r index --stats` warns when a package has any;
+  `scip-r batch` writes `diagnostics.json` per affected package.
+- `scip-r batch` records per-phase timings, file/line/byte counts and
+  worker peak RSS per package, and writes `batch-meta.json` (versions,
+  platform, workers, wall time).
+- `benchmarks/sweep.py`: the tier-1 robustness sweep over a whole
+  CRAN-style repository (fetch, run, report), with results for the
+  Bioconductor software set in `benchmarks/RESULTS.md`.
 - `examples/limma/`: an end-to-end call-graph example on Bioconductor's
   limma (networkx and igraph scripts, rendered graphs, metrics).
 - Top-level `assign("name", value)` defines `name`; names registered as

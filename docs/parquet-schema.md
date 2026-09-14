@@ -53,7 +53,7 @@ need no string splitting. scip-r's symbol convention is
 | --- | --- | --- |
 | `tool_name` | string | `scip-r` |
 | `tool_version` | string | scip-r version that wrote the index |
-| `tool_arguments` | list<string> | every `key=value` provenance stamp: `package`, `version`, `manager`, `git_commit`, `git_dirty`, `source_tarball`, `source_sha256`, Bioconductor/CRAN build fields (`git_url`, `git_branch`, `git_last_commit`, `date_publication`, `repository`, ...), and after `resolve`: `resolve_run_id`, `resolver`, `r_version`, `bioc_version` |
+| `tool_arguments` | list<string> | every `key=value` provenance stamp: `package`, `version`, `manager`, `source_files`, `source_lines`, `source_bytes`, `parse_errors`, `parse_error_documents`, `git_commit`, `git_dirty`, `source_tarball`, `source_sha256`, Bioconductor/CRAN build fields (`git_url`, `git_branch`, `git_last_commit`, `date_publication`, `repository`, ...), and after `resolve`: `resolve_run_id`, `resolver`, `r_version`, `bioc_version` |
 | `project_root` | string | `file://` URI of the indexed package root (or tarball) |
 | `protocol_version` | string | SCIP protocol version name |
 | `text_document_encoding` | string | `UTF8` |
