@@ -792,3 +792,42 @@ def test_enclosing_range_on_top_level_definitions(testpkg_index: scip.Index) -> 
     assert list(z.enclosing_range) == [1, 0, 5, 1]
     refs = [o for o in doc.occurrences if not o.symbol_roles & DEF or o.symbol.startswith("local")]
     assert all(not o.enclosing_range for o in refs)
+
+
+# --- findings from indexing limma ---------------------------------------------------
+
+
+def test_top_level_assign_defines_a_symbol(make_package: MakePackage) -> None:
+    root = make_package(
+        {
+            "R/a.R": (
+                'assign("[.RGList", function(object, i, j, ...) object)\n'
+                'assign(x = "helper", value = 42)\n'
+                'assign("elsewhere", 1, envir = globalenv())\n'
+                'f <- function() { assign("local_only", 1); helper }\n'
+            )
+        }
+    )
+    idx = build_index(root)
+    doc = idx.documents[0]
+    kinds = {s.symbol: s.kind for s in doc.symbols}
+    K = scip.SymbolInformation.Kind
+    assert kinds["scip-r cran pkg 1.0.0 [.RGList()."] == K.Function
+    assert kinds["scip-r cran pkg 1.0.0 helper."] == K.Variable
+    assert not any("elsewhere" in s or "local_only" in s for s in kinds)
+    occ = symbols_at(idx, "R/a.R")
+    assert occ["scip-r cran pkg 1.0.0 [.RGList()."] == [[0, 7, 17]]  # the string literal
+    assert occ["scip-r cran pkg 1.0.0 helper."] == [[1, 11, 19], [3, 43, 49]]
+    assert len(occ["scip-r . base . assign()."]) == 4  # assign itself is still a call
+
+
+def test_s3_registered_alias_is_a_function(make_package: MakePackage) -> None:
+    root = make_package(
+        {"R/a.R": ".setdimnames <- function(x, value) x\n'dimnames<-.MAList' <- .setdimnames\n"}
+    )
+    (root / "NAMESPACE").write_text('S3method("dimnames<-", MAList)\n')
+    idx = build_index(root)
+    syms = {s.symbol: s for s in idx.documents[0].symbols}
+    alias = syms["scip-r cran pkg 1.0.0 dimnames<-.MAList()."]
+    assert alias.kind == scip.SymbolInformation.Kind.Function
+    assert [r.symbol for r in alias.relationships] == ["scip-r . base . dimnames<-()."]

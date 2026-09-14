@@ -8,6 +8,15 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `examples/limma/`: an end-to-end call-graph example on Bioconductor's
+  limma (networkx and igraph scripts, rendered graphs, metrics).
+- Top-level `assign("name", value)` defines `name`; names registered as
+  S3 methods in NAMESPACE are functions even when aliased to a value
+  (`"dimnames<-.MAList" <- .setdimnames`). Both found by indexing limma.
+- The resolver resolves every name scip-r asks about (including
+  operators such as `[`) and reports versions and managers for installed
+  dependencies referenced with `pkg::` even when loading did not pull
+  them in.
 - `scip-r index` accepts a source tarball (`.tar.gz`); the digest is
   stamped as provenance. `--manager` overrides the manager inferred from
   DESCRIPTION (`biocViews` gives `bioconductor`, `Priority: base` gives

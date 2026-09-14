@@ -106,11 +106,22 @@ def guessed_names(index: scip.Index) -> list[str]:
     return sorted(out)
 
 
+def referenced_packages(index: scip.Index) -> list[str]:
+    """Packages named by external references (``pkg::fn``, imports)."""
+    out: set[str] = set()
+    for info in index.external_symbols:
+        p = parse_symbol(info.symbol)
+        if p.package and p.package != GUESSED_PACKAGE:
+            out.add(p.package)
+    return sorted(out)
+
+
 def run_resolver(
     pkg_dir: Path | str | None = None,
     *,
     installed: str | None = None,
     names: list[str] | None = None,
+    packages: list[str] | None = None,
     rscript: str | Path | None = None,
     timeout: float | None = 600,
 ) -> dict[str, Any]:
@@ -118,7 +129,9 @@ def run_resolver(
 
     Give either ``pkg_dir`` (a source checkout, loaded with pkgload) or
     ``installed`` (the name of an installed package, loaded with
-    ``loadNamespace``).
+    ``loadNamespace``). ``names`` are extra names to resolve at namespace
+    level; ``packages`` are referenced packages whose installed version
+    and manager should be reported even if loading did not pull them in.
     """
     if (pkg_dir is None) == (installed is None):
         raise ValueError("give exactly one of pkg_dir or installed")
@@ -136,6 +149,10 @@ def run_resolver(
             names_file = Path(tmp) / "names.json"
             names_file.write_text(json.dumps(names), encoding="utf-8")
             cmd += ["--names", str(names_file)]
+        if packages:
+            packages_file = Path(tmp) / "packages.json"
+            packages_file.write_text(json.dumps(packages), encoding="utf-8")
+            cmd += ["--packages", str(packages_file)]
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
         if proc.returncode != 0 or not out.is_file():
             raise ResolverError(proc.returncode, proc.stderr or proc.stdout)
@@ -453,7 +470,12 @@ def resolve_index(
     """Run the R resolver (source checkout or installed package) and merge
     it into ``index`` in place."""
     resolution = run_resolver(
-        pkg_dir, installed=installed, names=guessed_names(index), rscript=rscript, timeout=timeout
+        pkg_dir,
+        installed=installed,
+        names=guessed_names(index),
+        packages=referenced_packages(index),
+        rscript=rscript,
+        timeout=timeout,
     )
     stats = merge_resolution(index, resolution)
     return ResolveResult(index=index, resolution=resolution, stats=stats)

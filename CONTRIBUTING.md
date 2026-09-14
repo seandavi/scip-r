@@ -48,7 +48,8 @@ uv run scip-r index tests/fixtures/testpkg -o /tmp/index.scip --stats
 | `src/scipr/scip_pb2.py` | **generated** from `proto/scip.proto`; do not hand-edit |
 | `src/scipr/resolve.py`, `src/scipr/r/resolve.R` | optional second pass with a real R session (`scip-r resolve`); see `docs/resolve.md` |
 | `actions/resolve/` | composite GitHub Action running both passes |
-| `docs/` | ADRs, Parquet schema, Python API, resolver guide |
+| `docs/` | ADRs, Parquet schema, Python API, resolver guide, security stance |
+| `examples/limma/` | reproducible call-graph example on a real package (networkx and igraph) |
 | `tests/fixtures/testpkg` | tiny R package used by most tests, plus its golden index |
 
 ## Adding a parser change

@@ -261,14 +261,37 @@ def _target_name(src: bytes, node: Node) -> str | None:
     return None
 
 
+def _assign_call_parts(src: bytes, node: Node) -> Assignment | None:
+    """``assign("name", value)`` with a literal name (common for S3 methods
+    on operators, e.g. ``assign("[.RGList", function(...) ...)``)."""
+    if node.type != "call" or _call_name(src, node) != "assign":
+        return None
+    args = _call_args(src, node)
+    named = {n: v for n, v in args if n is not None}
+    positional = [v for n, v in args if n is None]
+    target = named.get("x", positional[0] if positional else None)
+    value = named.get("value", positional[1] if len(positional) > 1 else None)
+    if target is None or value is None or target.type != "string":
+        return None
+    if any(n in ("envir", "pos") for n in named):
+        return None  # assigning somewhere other than the namespace
+    name = _string_value(src, target)
+    if name is None:
+        return None
+    return Assignment(target=target, name=name, value=value)
+
+
 def _assignment_parts(src: bytes, node: Node) -> Assignment | None:
     """If ``node`` is ``name <op> value`` (or ``value -> name``) with a
-    simple name on the target side, describe it; else ``None``.
+    simple name on the target side, or ``assign("name", value)``, describe
+    it; else ``None``.
 
     Not handled, by design: destructuring targets such as ``obj$field <- v``,
     ``x[i] <- v`` or ``names(x) <- v``; those are walked as ordinary
     expressions so the reads inside them are still recorded.
     """
+    if node.type == "call":
+        return _assign_call_parts(src, node)
     if node.type != "binary_operator":
         return None
     op = node.child_by_field_name("operator")
@@ -533,6 +556,10 @@ def collect_top_level_symbols(
                     range=_node_range(a.target),
                 )
     if namespace is not None:
+        for s3 in namespace.s3methods:
+            alias = symbols.get(s3.method)
+            if alias is not None and alias.kind == "value":
+                alias.kind = "function"  # e.g. "dimnames<-.MAList" <- .setdimnames
         _mark_exports(symbols, namespace)
     return symbols
 
@@ -716,6 +743,11 @@ class DocumentIndexer:
             # fall through to generic recursion for non-assignment binary ops
 
         if t == "call":
+            parts = _assign_call_parts(self.src, node)
+            if parts is not None:
+                # assign("name", value): record the definition, then walk the
+                # call normally so `assign` itself is still a reference.
+                self._handle_assignment(parts, scope)
             self._walk_call(node, scope)
             return
 

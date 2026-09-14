@@ -379,3 +379,45 @@ def test_real_resolver_installed_mode(tmp_path: Path) -> None:
     assert data["package"]["name"] == "jsonlite" and data["package"]["load_mode"] == "installed"
     assert data["package"]["manager"] == "cran"
     assert data["environment"]["packages"]["base"]["manager"] == "r"
+
+
+def test_referenced_packages(fresh_index: scip.Index) -> None:
+    from scipr.resolve import referenced_packages
+
+    assert referenced_packages(fresh_index) == ["R6", "methods", "stats"]
+
+
+def test_run_resolver_passes_names_and_packages(monkeypatch, tmp_path: Path) -> None:
+    import scipr.resolve as mod
+
+    seen: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        out = Path(cmd[cmd.index("--out") + 1])
+        out.write_text('{"run_id": "x"}')
+        for flag in ("--names", "--packages"):
+            if flag in cmd:
+                seen[flag] = json.loads(Path(cmd[cmd.index(flag) + 1]).read_text())
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(mod, "find_rscript", lambda _=None: Path("/usr/bin/Rscript"))
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    data = mod.run_resolver("pkgdir", names=["[", "mean"], packages=["MASS", "Biobase"])
+    assert data == {"run_id": "x"}
+    assert seen["--names"] == ["[", "mean"] and seen["--packages"] == ["MASS", "Biobase"]
+    assert "--pkg" in seen["cmd"]
+
+
+@pytest.mark.r
+@needs_r
+def test_real_resolver_keeps_requested_operator_names_and_reports_packages() -> None:
+    from scipr.resolve import run_resolver
+
+    data = run_resolver(
+        installed="jsonlite", names=["[", "dimnames<-"], packages=["stats", "not-a-package"]
+    )
+    by = {r["name"]: r for r in data["resolutions"]}
+    assert by["["]["package"] == "base" and by["dimnames<-"]["package"] == "base"
+    assert data["environment"]["packages"]["stats"]["manager"] == "r"
+    assert "not-a-package" not in data["environment"]["packages"]

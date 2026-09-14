@@ -287,6 +287,14 @@ rows = index_to_rows(index)  # {table: [dict, ...]}, no extras needed
 write_parquet(index, "index-parquet/")  # needs scip-r[export]
 ```
 
+## Example: a real package
+
+[examples/limma/](examples/limma/) indexes Bioconductor's limma, resolves
+it against the installed namespace, and builds call graphs with networkx
+and igraph: most-called helpers, PageRank, entry-point reach, dependency
+usage, and a rendered picture of the busiest functions. One script
+reproduces it.
+
 ## Symbol scheme
 
 Package-level: `scip-r <manager> <package> <version> <descriptor>` where
