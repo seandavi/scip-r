@@ -23,6 +23,7 @@ Tables (all string columns unless noted):
 ``symbols``
     per-document ``SymbolInformation``: ``relative_path``, ``symbol``,
     ``kind``, ``display_name``, ``documentation`` (list<string>),
+    ``signature`` (full call signature with formals, e.g. ``f(x, n = 1L, ...)``),
     ``enclosing_symbol``, ``exported`` (bool), plus the parsed symbol columns
 ``external_symbols``
     same shape as ``symbols`` with ``relative_path`` null and no ``exported``,
@@ -52,7 +53,7 @@ from pathlib import Path
 from typing import Any
 
 from . import scip_pb2 as scip
-from .parser import EXPORTED_DOC, index_arguments
+from .parser import EXPORTED_DOC, index_arguments, signature_of
 from .symbols import parse_symbol
 
 TABLES: tuple[str, ...] = (
@@ -121,6 +122,7 @@ def _symbol_info_row(info: scip.SymbolInformation, relative_path: str | None) ->
         "kind": scip.SymbolInformation.Kind.Name(info.kind),
         "display_name": info.display_name or None,
         "documentation": list(info.documentation),
+        "signature": signature_of(info).text or None,
         "enclosing_symbol": info.enclosing_symbol or None,
         **_symbol_columns(info.symbol),
     }
@@ -269,6 +271,7 @@ def _arrow_schemas() -> dict[str, Any]:
         ("kind", pa.string()),
         ("display_name", pa.string()),
         ("documentation", pa.list_(pa.string())),
+        ("signature", pa.string()),
         ("enclosing_symbol", pa.string()),
         *sym_cols,
     ]

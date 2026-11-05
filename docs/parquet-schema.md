@@ -77,6 +77,7 @@ One row per symbol *defined* in a document (SCIP `SymbolInformation`).
 | `kind` | string | `Function`, `Method`, `Class`, `Field`, `Variable`, … (SCIP kind name) |
 | `display_name` | string | unused by scip-r (null) |
 | `documentation` | list<string> | first line of the definition (`f <- function(x, y) {`), then `@export` if NAMESPACE exports it |
+| `signature` | string | full call signature with every formal and its default, on one line: `f(x, n = 1L, ...)` (SCIP `signature_documentation`). Set for functions, S4 generics and methods, and R6/RC methods whose definition is a literal `function(...)` (or, for `setMethod`, a function defined in the package); null otherwise |
 | `enclosing_symbol` | string | unused by scip-r (null) |
 | `exported` | bool | `@export` present: the symbol is exported by NAMESPACE (`export`, `exportPattern`, `exportClasses`, `exportMethods`, or the class's generator) |
 | parsed symbol columns | | see above |

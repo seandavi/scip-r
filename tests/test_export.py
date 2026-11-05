@@ -45,11 +45,16 @@ def test_symbol_row_parsed_columns(testpkg_index: scip.Index) -> None:
     assert z["is_function"] is True
     assert z["is_local"] is False
     assert z["documentation"] == ["zscore <- function(x, na.rm = TRUE) {", "@export"]
+    assert z["signature"] == "zscore(x, na.rm = TRUE)"
     assert z["exported"] is True
     assert z["display_name"] is None
     assert z["manager"] == "cran" and z["owner"] is None and z["is_member"] is False
     p = next(r for r in rows["symbols"] if r["name"] == "print.zresult")
     assert p["exported"] is False
+    assert p["signature"] == "print.zresult(x, ...)"
+    interval = next(r for r in rows["symbols"] if r["name"] == "Interval")
+    assert interval["signature"] is None  # classes have no call signature
+    assert all(r["signature"] is None for r in rows["external_symbols"])
     add = next(r for r in rows["symbols"] if r["name"] == "add")
     assert (add["owner"], add["is_member"], add["is_function"], add["kind"]) == (
         "Counter",
@@ -140,6 +145,8 @@ def test_index_to_arrow_schemas(testpkg_index: scip.Index) -> None:
     assert tables["occurrences"].schema.field("start_line").type == pa.int64()
     assert tables["occurrences"].schema.field("caller").type == pa.string()
     assert tables["symbols"].schema.field("documentation").type == pa.list_(pa.string())
+    assert tables["symbols"].schema.field("signature").type == pa.string()
+    assert tables["external_symbols"].schema.field("signature").type == pa.string()
     assert tables["relationships"].num_rows == 2
     assert tables["relationships"].schema.names[:5] == [
         "index_package",
@@ -222,6 +229,11 @@ def test_write_duckdb_and_query(testpkg_index: scip.Index, tmp_path: Path) -> No
             "select documentation[1] from symbols where name = 'run_pipeline'"
         ).fetchone()
         assert doc == ("run_pipeline <- function(x, clip = TRUE) {",)
+        sigs = con.execute(
+            "select name, signature from symbols where signature is not null order by name"
+        ).fetchall()
+        assert ("winsorize", "winsorize(x, probs = c(0.05, 0.95))") in sigs
+        assert ("width", "width(x)") in sigs  # generic and its method
     finally:
         con.close()
 

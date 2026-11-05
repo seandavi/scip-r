@@ -8,6 +8,15 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Function signatures: functions, S4 generics and methods, and R6 /
+  reference-class methods carry their full formals in SCIP
+  `SymbolInformation.signature_documentation` (`language = "R"`, text like
+  `f(x, method = c("a", "b"), ...)`), however many lines the definition
+  spans; comments inside defaults are dropped. A `setMethod` whose
+  definition names a function from the same package borrows its formals.
+  Exported as a new `signature` column in the `symbols` and
+  `external_symbols` tables. `documentation[0]` keeps its first-line
+  meaning. Rationale: [ADR 0002](docs/adr/0002-static-function-signatures.md).
 - Parse diagnostics: every index stamps `parse_errors` and
   `parse_error_documents` (tree-sitter error and missing nodes) into
   `tool_info.arguments`; `build_index(diagnostics_out=...)` returns the

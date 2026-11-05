@@ -15,6 +15,9 @@ Design notes (see README for the full write-up):
       to their package, ``S3method`` registrations link methods to generics
     * function parameters, ``for``-loop variables and in-body assignments
       -- SCIP "local" symbols, scoped to one function
+    * full call signatures (every formal and its default) of functions,
+      generics, S4 methods and R6/RC methods, in
+      ``SymbolInformation.signature_documentation``
     * ``pkg::fun`` / ``pkg:::fun`` -- references to external symbols; the
       ``:::`` form is recorded on the occurrence
     * bare calls to names that resolve to nothing above are treated as
@@ -27,9 +30,10 @@ Design notes (see README for the full write-up):
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 from tree_sitter import Node, Parser
 
@@ -171,6 +175,108 @@ def _decode(src: bytes, node: Node) -> str:
     return src[node.start_byte : node.end_byte].decode("utf-8", "replace")
 
 
+def signature_of(info: scip.SymbolInformation) -> scip.Signature:
+    """``info.signature_documentation``, typed. The generated stub declares
+    the field as ``Signature`` inside ``SymbolInformation``, where that name
+    resolves to the ``Kind.Signature`` enum member, not the message."""
+    return cast(scip.Signature, info.signature_documentation)
+
+
+# ---- function signatures --------------------------------------------------------
+
+_SYNTACTIC_NAME_RE = re.compile(r"^(?:(?:[A-Za-z]|\.[._A-Za-z])[._A-Za-z0-9]*|\.)$")
+_RESERVED_WORDS = frozenset(
+    {
+        "if", "else", "repeat", "while", "function", "for", "next", "break", "in",
+        "TRUE", "FALSE", "NULL", "Inf", "NaN", "NA", "NA_integer_", "NA_real_",
+        "NA_character_", "NA_complex_",
+    }
+)  # fmt: skip
+
+
+def _display_name(name: str) -> str:
+    """``name`` as R would print it in a call: backticked unless syntactic.
+    Names taken from a backticked identifier arrive with their backticks."""
+    if len(name) > 1 and name.startswith("`") and name.endswith("`"):
+        # This is source spelling, not a decoded R name. Keep its escapes
+        # intact; only remove quoting when the contents need no escaping.
+        unquoted = name[1:-1]
+        if _SYNTACTIC_NAME_RE.fullmatch(unquoted) and unquoted not in _RESERVED_WORDS:
+            return unquoted
+        return name
+    if _SYNTACTIC_NAME_RE.match(name) and name not in _RESERVED_WORDS:
+        return name
+    return "`" + name.replace("`", "\\`") + "`"
+
+
+def _atoms(node: Node) -> list[Node]:
+    """Nodes requiring special rendering, in source order.
+
+    Identifiers, like strings, can contain quoted whitespace and escapes.
+    Brace blocks need statement separators rather than whitespace folding.
+    """
+    if node.type in ("string", "comment", "identifier", "braced_expression"):
+        return [node]
+    out: list[Node] = []
+    for child in node.children:
+        out.extend(_atoms(child))
+    return out
+
+
+_BREAK = "\0"  # R source cannot contain NUL, so it is safe as a marker
+_LINE_BREAK_RE = re.compile(r"[ \t]*\r?\n\s*")
+_FOLD_RE = re.compile(r"[ \t]*\0[\s\0]*")
+_FOLD_TIGHT_RE = re.compile(r"(?<=[(\[{])\0|\0(?=[)\]},])")
+
+
+def _compact_source(src: bytes, node: Node) -> str:
+    """Source text of an expression on one line: comments dropped and line
+    breaks (with their indentation) folded into a single space, or into
+    nothing next to brackets. Brace-block statements are joined with
+    semicolons. Other in-line spacing and quoted tokens are kept verbatim.
+    """
+    if node.type == "braced_expression":
+        statements = (child for child in node.named_children if child.type != "comment")
+        return "{" + "; ".join(_compact_source(src, child) for child in statements) + "}"
+    parts: list[str] = []
+    pos = node.start_byte
+    for atom in _atoms(node):
+        parts.append(
+            _LINE_BREAK_RE.sub(_BREAK, src[pos : atom.start_byte].decode("utf-8", "replace"))
+        )
+        if atom.type == "comment":
+            parts.append(_BREAK)
+        elif atom.type == "braced_expression":
+            parts.append(_compact_source(src, atom))
+        else:
+            parts.append(_decode(src, atom))
+        pos = atom.end_byte
+    parts.append(_LINE_BREAK_RE.sub(_BREAK, src[pos : node.end_byte].decode("utf-8", "replace")))
+    text = _FOLD_RE.sub(_BREAK, "".join(parts)).strip(_BREAK)
+    return _FOLD_TIGHT_RE.sub("", text).replace(_BREAK, " ")
+
+
+def _formals(src: bytes, fn: Node) -> tuple[str, ...]:
+    """Formals of a ``function_definition`` node as ``name`` or
+    ``name = default`` strings, in declaration order."""
+    params = fn.child_by_field_name("parameters")
+    out: list[str] = []
+    if params is None:
+        return ()
+    for p in params.children:
+        if p.type != "parameter":
+            continue
+        name = p.child_by_field_name("name")
+        if name is None:
+            continue
+        default = p.child_by_field_name("default")
+        formal = _decode(src, name)
+        if default is not None:
+            formal += " = " + _compact_source(src, default)
+        out.append(formal)
+    return tuple(out)
+
+
 # ---- symbol table ----------------------------------------------------------------
 
 
@@ -186,6 +292,17 @@ class TopLevelSymbol:
     generator: str | None = None  # class kind: variable holding an R6/RC generator
     contains: tuple[str, ...] = ()  # class kind: superclasses (S4 contains / R6 inherit)
     exported: bool | None = None  # None when the package has no NAMESPACE
+    # Rendered formals (``"x"``, ``"na.rm = TRUE"``, ``"..."``) when the
+    # definition is a literal ``function(...)``; None when source can't say.
+    formals: tuple[str, ...] | None = None
+    formals_from: str | None = None  # S4 method: top-level function given as its definition
+
+    @property
+    def signature_text(self) -> str | None:
+        """``name(formal, formal = default, ...)``, or None without formals."""
+        if self.formals is None:
+            return None
+        return f"{_display_name(self.name)}({', '.join(self.formals)})"
 
     @property
     def is_function(self) -> bool:
@@ -395,6 +512,20 @@ def _string_list(src: bytes, node: Node) -> list[str] | None:
     return None
 
 
+def _match_args(args: list[tuple[str | None, Node]], formals: tuple[str, ...]) -> dict[str, Node]:
+    """R's argument matching, minus partial matching: exact names first,
+    then positional arguments fill the remaining formals in order."""
+    matched = {n: v for n, v in args if n in formals}
+    free = iter(f for f in formals if f not in matched)
+    for n, v in args:
+        if n is None:
+            f = next(free, None)
+            if f is None:
+                break
+            matched[f] = v
+    return matched
+
+
 def _call_args(src: bytes, node: Node) -> list[tuple[str | None, Node]]:
     """``[(argument name or None, value node)]`` for a call."""
     args = node.child_by_field_name("arguments")
@@ -437,6 +568,8 @@ class DefinerCall:
     inherit: str | None = None  # R6: generator variable name
     members: tuple[Member, ...] = ()
     system: str = ""  # S4 | RC | R6 for classes
+    function: Node | None = None  # generic ``def`` / method ``definition``, if literal
+    function_ref: str | None = None  # method ``definition`` given as a bare name
 
     @property
     def disambiguator(self) -> str | None:
@@ -522,7 +655,15 @@ def _definer_call(src: bytes, node: Node) -> DefinerCall | None:
         name = _string_value(src, name_node) if name_node is not None else None
         if name is None or name_node is None:
             return None
-        return DefinerCall(kind="function", name=name, name_node=name_node)
+        fn = _match_args(args, ("name", "def")).get("def")
+        if fn is None or fn.type != "function_definition":
+            fn = named.get("useAsDefault")
+        return DefinerCall(
+            kind="function",
+            name=name,
+            name_node=name_node,
+            function=fn if fn is not None and fn.type == "function_definition" else None,
+        )
     if callee in METHOD_DEFINERS:
         name_node = arg("f", 0)
         name = _string_value(src, name_node) if name_node is not None else None
@@ -532,7 +673,15 @@ def _definer_call(src: bytes, node: Node) -> DefinerCall | None:
         sig = _string_list(src, sig_node) if sig_node is not None else None
         if sig is None:
             return None
-        return DefinerCall(kind="method", name=name, name_node=name_node, signature=tuple(sig))
+        fn = _match_args(args, ("f", "signature", "definition")).get("definition")
+        return DefinerCall(
+            kind="method",
+            name=name,
+            name_node=name_node,
+            signature=tuple(sig),
+            function=fn if fn is not None and fn.type == "function_definition" else None,
+            function_ref=_decode(src, fn) if fn is not None and fn.type == "identifier" else None,
+        )
     return None
 
 
@@ -581,6 +730,8 @@ def collect_top_level_symbols(
                     disambiguator=definer.disambiguator,
                     generator=chain[0].name if chain and definer.kind == "class" else None,
                     contains=definer.contains,
+                    formals=_formals(src, definer.function) if definer.function else None,
+                    formals_from=definer.function_ref,
                 )
                 if definer.kind == "class" and definer.inherit:
                     symbols[key].contains = (definer.inherit,)
@@ -594,18 +745,27 @@ def collect_top_level_symbols(
                         file=path,
                         range=_node_range(m.name_node),
                         owner=definer.name,
+                        formals=_formals(src, m.value) if m.is_function else None,
                     )
             if not chain:
                 continue
-            kind = "function" if node.type == "function_definition" else "value"
+            is_fn = node.type == "function_definition"
+            formals = _formals(src, node) if is_fn else None
             for a in chain:
                 symbols[a.name] = TopLevelSymbol(
                     name=a.name,
-                    kind=kind,
+                    kind="function" if is_fn else "value",
                     signature=signature,
                     file=path,
                     range=_node_range(a.target),
+                    formals=formals,
                 )
+    # setMethod("f", "A", .f_impl): borrow the formals of the named function.
+    for sym in symbols.values():
+        if sym.formals is None and sym.formals_from is not None:
+            impl = symbols.get(sym.formals_from)
+            if impl is not None and impl.kind == "function":
+                sym.formals = impl.formals
     if namespace is not None:
         for s3 in namespace.s3methods:
             alias = symbols.get(s3.method)
@@ -736,6 +896,11 @@ class DocumentIndexer:
         if sym.exported:
             info.documentation.append(EXPORTED_DOC)
         info.kind = sym.scip_kind
+        signature_text = sym.signature_text
+        if signature_text is not None:
+            sig = signature_of(info)
+            sig.language = "R"
+            sig.text = signature_text
         if sym.kind == "method":
             # An S4 method implements its generic. When the generic is
             # defined in this package we can say so statically; for

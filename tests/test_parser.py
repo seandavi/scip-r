@@ -877,3 +877,175 @@ def test_size_stamps(testpkg_index: scip.Index, testpkg_dir: Path) -> None:
     assert stamps["source_files"] == str(len(files))
     assert stamps["source_bytes"] == str(sum(f.stat().st_size for f in files))
     assert stamps["source_lines"] == str(sum(len(f.read_text().splitlines()) for f in files))
+
+
+# --- signatures (SymbolInformation.signature_documentation) ------------------
+
+
+def _signatures(index: scip.Index) -> dict[str, str]:
+    """descriptor -> signature text, for every symbol that has one."""
+    return {
+        s.symbol.split(" ", 4)[4]: s.signature_documentation.text
+        for d in index.documents
+        for s in d.symbols
+        if s.HasField("signature_documentation")
+    }
+
+
+def test_signature_has_every_formal(testpkg_index: scip.Index) -> None:
+    sigs = _signatures(testpkg_index)
+    assert sigs["zscore()."] == "zscore(x, na.rm = TRUE)"
+    assert sigs["winsorize()."] == "winsorize(x, probs = c(0.05, 0.95))"
+    assert sigs["print.zresult()."] == "print.zresult(x, ...)"
+    info = next(
+        s for d in testpkg_index.documents for s in d.symbols if s.symbol.endswith(" zscore().")
+    )
+    assert info.signature_documentation.language == "R"
+
+
+def test_signature_spans_lines_and_drops_comments(make_package: MakePackage) -> None:
+    src = (
+        "f <- function(x,\n"
+        '              method = c("a",  # the default\n'
+        '                         "b"),\n'
+        '              sep = "\\n  ",\n'
+        "              `odd arg` = list(\n"
+        "                  a = 1\n"
+        "              ),\n"
+        "              ...) {\n"
+        "  x\n"
+        "}\n"
+    )
+    idx = build_index(make_package({"R/a.R": src}))
+    sig = _signatures(idx)["f()."]
+    # Breaks fold to one space (none next to brackets); in-line spacing,
+    # string contents and backticks are kept.
+    assert sig == 'f(x, method = c("a", "b"), sep = "\\n  ", `odd arg` = list(a = 1), ...)'
+    # documentation[0] keeps its old first-line meaning
+    assert idx.documents[0].symbols[0].documentation[0] == "f <- function(x,"
+
+
+@pytest.mark.parametrize(
+    ("default", "expected"),
+    [
+        ("{\n a <- 1\n a + 1\n}", "{a <- 1; a + 1}"),
+        (
+            "function() {\n a <- 1 # a comment with ;\n a + 1\n}",
+            "function() {a <- 1; a + 1}",
+        ),
+        (
+            "{\n if (TRUE) {\n a <- 1\n a + 1\n }\n 3\n}",
+            "{if (TRUE) {a <- 1; a + 1}; 3}",
+        ),
+        ("{a <- 1;\n a + 1}", "{a <- 1; a + 1}"),
+        ("{\n # nothing here\n}", "{}"),
+    ],
+)
+def test_signature_preserves_block_statement_boundaries(
+    make_package: MakePackage, default: str, expected: str
+) -> None:
+    src = f"f <- function(x = {default}) x\n"
+    sigs = _signatures(build_index(make_package({"R/a.R": src})))
+    assert sigs["f()."] == f"f(x = {expected})"
+
+
+def test_signature_preserves_quoted_default_tokens(make_package: MakePackage) -> None:
+    src = 'f <- function(x = `a\nb`, y = "a\nb") x\n'
+    sigs = _signatures(build_index(make_package({"R/a.R": src})))
+    # Quoted newlines belong to the token, not to source formatting.
+    assert sigs["f()."] == 'f(x = `a\nb`, y = "a\nb")'
+
+
+def test_signature_empty_formals_and_lambda(make_package: MakePackage) -> None:
+    idx = build_index(make_package({"R/a.R": "f <- function() 1\ng <- \\(a, b = 2) a + b\n"}))
+    sigs = _signatures(idx)
+    assert sigs["f()."] == "f()"
+    assert sigs["g()."] == "g(a, b = 2)"
+
+
+def test_signature_backticks_non_syntactic_names(make_package: MakePackage) -> None:
+    src = (
+        '"%+%" <- function(e1, e2) e1\n'
+        '"foo<-" <- function(x, value) x\n'
+        "`my fun` <- function(a) a\n"
+        "`plain` <- function(b) b\n"
+    )
+    sigs = _signatures(build_index(make_package({"R/a.R": src})))
+    assert sigs["%+%()."] == "`%+%`(e1, e2)"
+    assert sigs["foo<-()."] == "`foo<-`(x, value)"
+    # backticked identifiers keep their backticks in the symbol; the
+    # signature backticks only when the name needs it
+    assert sigs["`my fun`()."] == "`my fun`(a)"
+    assert sigs["`plain`()."] == "plain(b)"
+
+
+@pytest.mark.parametrize("name", [r"`a\`b`", r"`a\\b`", r"`a\nb`"])
+def test_signature_preserves_escaped_function_names(make_package: MakePackage, name: str) -> None:
+    src = f"{name} <- function(x) x\n"
+    sigs = _signatures(build_index(make_package({"R/a.R": src})))
+    assert list(sigs.values()) == [f"{name}(x)"]
+
+
+def test_signature_chained_assignment(make_package: MakePackage) -> None:
+    sigs = _signatures(build_index(make_package({"R/a.R": "a <- b <- function(x, y = 1) x\n"})))
+    assert sigs["a()."] == "a(x, y = 1)"
+    assert sigs["b()."] == "b(x, y = 1)"
+
+
+def test_signature_s4_generic_and_methods(make_package: MakePackage) -> None:
+    src = (
+        'setGeneric("area", function(shape, ...) standardGeneric("area"))\n'
+        'setGeneric(def = function(x, scale = 1) standardGeneric("grow"), name = "grow")\n'
+        'setGeneric("summary")\n'
+        'setMethod("area", "Square", function(shape, ...) shape@side^2)\n'
+        'setMethod("area", signature = "Circle", function(shape, digits = 2L, ...) pi)\n'
+        'setMethod("grow", "Square", .grow_square)\n'
+        'setMethod("grow", "Circle", stats::median)\n'
+    )
+    impl = ".grow_square <- function(x, scale = 1) x\n"
+    idx = build_index(make_package({"R/a.R": src, "R/z.R": impl}))
+    sigs = _signatures(idx)
+    assert sigs["area()."] == "area(shape, ...)"
+    assert sigs["grow()."] == "grow(x, scale = 1)"
+    assert sigs["area(Square)."] == "area(shape, ...)"
+    # named `signature =` doesn't shift the positional `definition`
+    assert sigs["area(Circle)."] == "area(shape, digits = 2L, ...)"
+    # definition given by name: formals of that package function, even if
+    # it is defined in a later file
+    assert sigs["grow(Square)."] == "grow(x, scale = 1)"
+    # formals source alone can't see
+    assert "summary()." not in sigs
+    assert "grow(Circle)." not in sigs
+
+
+def test_signature_setgeneric_use_as_default(make_package: MakePackage) -> None:
+    src = 'setGeneric("nrows", useAsDefault = function(x, na.rm = FALSE) NROW(x))\n'
+    sigs = _signatures(build_index(make_package({"R/a.R": src})))
+    assert sigs["nrows()."] == "nrows(x, na.rm = FALSE)"
+
+
+def test_signature_r6_and_reference_class_methods(make_package: MakePackage) -> None:
+    src = (
+        'Acc <- R6::R6Class("Acc", public = list(\n'
+        "  total = 0,\n"
+        "  add = function(n = 1, ...) invisible(self)\n"
+        "))\n"
+        'Person <- setRefClass("Person", fields = list(name = "character"),\n'
+        '  methods = list(greet = function(prefix = "Hi") prefix))\n'
+    )
+    sigs = _signatures(build_index(make_package({"R/a.R": src})))
+    assert sigs["Acc#add()."] == "add(n = 1, ...)"
+    assert sigs["Person#greet()."] == 'greet(prefix = "Hi")'
+    assert "Acc#total." not in sigs
+    assert "Person#name." not in sigs
+
+
+def test_no_signature_for_values_and_classes(make_package: MakePackage) -> None:
+    src = (
+        "x <- 1\n"
+        "wrapped <- make_wrapper(identity)\n"
+        "alias <- identity\n"
+        'setClass("Shape", representation("VIRTUAL"))\n'
+    )
+    idx = build_index(make_package({"R/a.R": src}))
+    assert _signatures(idx) == {}
